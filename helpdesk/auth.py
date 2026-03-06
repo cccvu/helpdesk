@@ -59,6 +59,9 @@ ALLOWED_PATHS = [
     "/api/method/frappe.core.doctype.user.user.reset_password",
     "/api/method/frappe.desk.form.load.getdoctype",
     "/api/method/run_doc_method",
+    "/api/method/frappe.core.api.user_invitation.accept_invitation",
+    "/api/method/frappe.core.api.user_invitation.cancel_invitation",
+    "/api/method/frappe.core.api.user_invitation.invite_by_email",
     "/api/method/frappe.desk.reportview.export_query",
 ]
 
