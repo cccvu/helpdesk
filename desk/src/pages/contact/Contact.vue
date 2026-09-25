@@ -291,7 +291,7 @@ const dropdownActions = computed(() => {
       },
     });
   }
-  if (contact.doc?.user) {
+  if (contact.doc?.user && !window.disable_user_pass_login) {
     baseActions.push({
       label: __("Send reset password email"),
       icon: "mail",

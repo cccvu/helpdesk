@@ -115,7 +115,10 @@
           @click="emit('updateStep', 'user-email-settings')"
         />
       </div>
-      <div class="flex items-center justify-between mt-6">
+      <div
+        v-if="passwordLoginEnabled"
+        class="flex items-center justify-between mt-6"
+      >
         <div class="flex flex-col gap-1">
           <span class="text-base-medium text-ink-gray-8">
             {{ __("Password") }}
@@ -133,7 +136,7 @@
     </template>
   </SettingsLayoutBase>
   <ChangePasswordModal
-    v-if="showChangePasswordModal"
+    v-if="passwordLoginEnabled && showChangePasswordModal"
     v-model="showChangePasswordModal"
   />
 </template>
@@ -162,6 +165,8 @@ import ChangePasswordModal from "./components/ChangePasswordModal.vue";
 
 const agentStatusStore = useAgentStatusStore();
 const showChangePasswordModal = ref(false);
+// Sites that sign in by email link only have no password to change.
+const passwordLoginEnabled = !window.disable_user_pass_login;
 
 const { userId, hasAgentRecord } = useAuthStore();
 const user = createDocumentResource({ doctype: "User", name: userId });
