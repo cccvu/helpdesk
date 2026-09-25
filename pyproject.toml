@@ -26,5 +26,5 @@ index_html_path = "./helpdesk/www/helpdesk/index.html"
 
 [project.urls]
 Homepage = "https://frappe.io/helpdesk"
-Repository = "https://github.com/frappe/helpdesk.git"
+Repository = "https://github.com/cccvu/helpdesk"
 "Bug Reports" = "https://github.com/frappe/helpdesk/issues"

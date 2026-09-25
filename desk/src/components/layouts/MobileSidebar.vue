@@ -40,8 +40,10 @@ import { computed, h, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { useAuthStore } from "@/stores/auth";
+import { useConfigStore } from "@/stores/config";
 import { isCustomerPortal } from "@/utils";
 import { useTheme } from "frappe-ui";
+import LucideCode from "~icons/lucide/code";
 import LucideMoon from "~icons/lucide/moon";
 import LucideSun from "~icons/lucide/sun";
 
@@ -93,7 +95,21 @@ const themeMenuItem = computed(() => ({
   onClick: () => toggleTheme(),
 }));
 
+const configStore = useConfigStore();
+
+// Offers the source of the running app (AGPL), from its pyproject.toml.
+const sourceCodeMenuOptions = window.source_url
+  ? [
+      {
+        icon: h(LucideCode),
+        label: __("Source code"),
+        onClick: () => window.open(window.source_url),
+      },
+    ]
+  : [];
+
 const customerPortalDropdown = computed(() => [
+  ...sourceCodeMenuOptions,
   {
     label: __("Log out"),
     icon: "lucide-log-out",
@@ -112,16 +128,22 @@ const agentPortalDropdown = computed(() => [
       window.open(path.href);
     },
   },
-  {
-    icon: "lucide-life-buoy",
-    label: __("Support"),
-    onClick: () => window.open("https://t.me/frappedesk"),
-  },
+  // Frappe's community chat isn't the support channel of a branded site.
+  ...(configStore.brandName
+    ? []
+    : [
+        {
+          icon: "lucide-life-buoy",
+          label: __("Support"),
+          onClick: () => window.open("https://t.me/frappedesk"),
+        },
+      ]),
   {
     icon: "lucide-book-open",
     label: __("Docs"),
     onClick: () => window.open("https://docs.frappe.io/helpdesk"),
   },
+  ...sourceCodeMenuOptions,
   {
     label: __("Log out"),
     icon: "lucide-log-out",

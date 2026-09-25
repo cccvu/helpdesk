@@ -95,6 +95,7 @@ import { showShortcutsModal } from "./layoutSettings";
 
 import { useShortcut } from "@/composables/shortcuts";
 import { __ } from "@/translation";
+import LucideCode from "~icons/lucide/code";
 import FileText from "~icons/lucide/file-text";
 import Globe from "~icons/lucide/globe";
 import LucideKeyboard from "~icons/lucide/keyboard";
@@ -128,7 +129,16 @@ const themeMenuItem = computed(() => ({
 
 const isFCSite = ref(window.is_fc_site);
 
+// Offers the source of the running app (AGPL), from its pyproject.toml.
+const sourceCodeMenuOption = {
+  icon: h(LucideCode),
+  label: __("Source code"),
+  onClick: () => window.open(window.source_url),
+  condition: () => !!window.source_url,
+};
+
 const customerPortalDropdown = computed(() => [
+  sourceCodeMenuOption,
   {
     group: __("Danger"),
     hideLabel: true,
@@ -156,12 +166,15 @@ const agentPortalDropdown = computed(() => [
     icon: "lucide-life-buoy",
     label: __("Support"),
     onClick: () => window.open("https://t.me/frappedesk"),
+    // Frappe's community chat isn't the support channel of a branded site.
+    condition: () => !configStore.brandName,
   },
   {
     icon: "lucide-book-open",
     label: __("Docs"),
     onClick: () => window.open("https://docs.frappe.io/helpdesk"),
   },
+  sourceCodeMenuOption,
   {
     label: __("Login to Frappe Cloud"),
     icon: FrappeCloudIcon,
