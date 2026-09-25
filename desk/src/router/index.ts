@@ -217,6 +217,43 @@ const routes = [
   },
 ];
 
+// Frappe's email-link sign-in drops redirect-to, so a guest who opened a deep
+// link (say, a ticket from a notification) would land on Home. Remember where
+// they were going and return there once, right after they sign in.
+const RETURN_PATH_KEY = "hd_return_path";
+const RETURN_PATH_TTL_MS = 15 * 60 * 1000;
+
+function rememberReturnPath(path: string) {
+  try {
+    localStorage.setItem(
+      RETURN_PATH_KEY,
+      JSON.stringify({ path, at: Date.now() })
+    );
+  } catch {
+    // Storage may be unavailable (private mode); sign-in still works.
+  }
+}
+
+function takeReturnPath(): string | null {
+  let saved: { path?: unknown; at?: unknown } | null;
+  try {
+    saved = JSON.parse(localStorage.getItem(RETURN_PATH_KEY) || "null");
+    localStorage.removeItem(RETURN_PATH_KEY);
+  } catch {
+    return null;
+  }
+  if (typeof saved?.path !== "string" || typeof saved.at !== "number") {
+    return null;
+  }
+  if (Date.now() - saved.at > RETURN_PATH_TTL_MS) return null;
+  // Only paths inside this app (the router never leaves /helpdesk/).
+  const path = saved.path;
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) {
+    return null;
+  }
+  return path;
+}
+
 const handleMobileView = (componentName: string) => {
   return isMobileView.value ? `Mobile${componentName}` : componentName;
 };
@@ -236,8 +273,14 @@ router.beforeEach(async (to, _, next) => {
   const interrupt = personaInterrupt(to, authStore);
   if (interrupt) return next(interrupt);
 
+  if (authStore.isLoggedIn) {
+    const returnPath = takeReturnPath();
+    if (returnPath && returnPath !== to.fullPath) return next(returnPath);
+  }
+
   if (!authStore.isLoggedIn) {
     const redirectURL = to.fullPath !== "/" ? to.fullPath : "";
+    if (redirectURL) rememberReturnPath(redirectURL);
 
     window.location.href =
       LOGIN_PAGE +
