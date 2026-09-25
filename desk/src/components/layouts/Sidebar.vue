@@ -42,7 +42,7 @@
     v-model="showHelpModal"
     v-model:articles="articles"
     appName="helpdesk"
-    title="Frappe Helpdesk"
+    :title="configStore.brandName || 'Helpdesk'"
     :logo="logo"
     docsLink="https://docs.frappe.io/helpdesk"
     :afterSkip="(step: string) => capture('onboarding_step_skipped_' + step)"
@@ -196,12 +196,16 @@ const profileSettings = computed(() => {
     : agentPortalDropdown.value;
 });
 
-const logo = h(
-  HDLogo,
-  {
-    class: "h-12 w-12",
-  },
-  null
+const logo = computed(() =>
+  configStore.brandLogo
+    ? h("img", {
+        src: configStore.brandLogo,
+        alt: "",
+        class: "h-12 w-12",
+      })
+    : h(HDLogo, {
+        class: "h-12 w-12",
+      })
 );
 
 const showPermissionNoticeBanner = computed(() => {
