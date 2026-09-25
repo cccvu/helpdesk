@@ -68,7 +68,11 @@ app.use(spritePlugin);
 app.use(pinia);
 app.use(router);
 app.use(translationPlugin);
-app.use(telemetryPlugin, { app_name: "helpdesk" });
+// The plugin downloads the telemetry client from a third-party origin before it
+// checks whether telemetry is enabled, so only install it when the boot says so.
+if (window.telemetry?.enabled) {
+  app.use(telemetryPlugin, { app_name: "helpdesk" });
+}
 
 for (const c in globalComponents) {
   app.component(c, globalComponents[c]);
