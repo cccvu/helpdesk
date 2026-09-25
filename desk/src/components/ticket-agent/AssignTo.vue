@@ -169,6 +169,7 @@
 import ShortcutKey from "@/components/ShortcutKey.vue";
 import { useShortcut } from "@/composables/shortcuts";
 import { useAgentStatusStore } from "@/stores/agentStatus.ts";
+import { useAuthStore } from "@/stores/auth";
 import { useUserStore } from "@/stores/user";
 import { capture } from "@/telemetry";
 import { __ } from "@/translation";
@@ -181,6 +182,7 @@ import {
 } from "@/types";
 import { prettyDate } from "@/utils.ts";
 import { useDebounceFn } from "@vueuse/core";
+import { useOnboarding } from "frappe-ui/frappe";
 import {
   Button,
   Checkbox,
@@ -207,6 +209,8 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const { hideLabel, ghost } = props;
+const { isManager } = useAuthStore();
+const { updateOnboardingStep } = useOnboarding("helpdesk");
 
 // No ticket in context (bulk assign) means nothing to save to: the picker then
 // just reports its selection through v-model and the parent decides what to do.
@@ -537,6 +541,8 @@ const addAssigneesResource = createResource({
     capture("ticket_assigned", {
       data: { doctype: "HD Ticket", source: "popover" },
     });
+    // Only managers run the onboarding checklist (Sidebar.vue).
+    if (isManager) updateOnboardingStep("assign_to_agent");
   },
 });
 

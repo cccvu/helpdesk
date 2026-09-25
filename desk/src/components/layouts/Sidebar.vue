@@ -87,7 +87,8 @@ import {
 } from "frappe-ui/frappe";
 
 import { HelpIcon } from "frappe-ui/icons";
-import { computed, h, markRaw, onMounted, ref } from "vue";
+import { useStorage } from "@vueuse/core";
+import { computed, h, markRaw, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import AppSidebar from "./AppSidebar.vue";
 import { showShortcutsModal } from "./layoutSettings";
@@ -482,9 +483,27 @@ async function getGeneralCategory() {
   return generalCategory;
 }
 
+// setUp() opens the panel on every page load until every step is done. Once a
+// manager closes or minimizes it, leave it closed on later loads; the sidebar
+// card and Help still open it.
+const onboardingDismissed = useStorage(
+  `hd_onboarding_dismissed_${window.session_user}`,
+  false
+);
+watch(showHelpModal, (open, wasOpen) => {
+  if (wasOpen && !open) onboardingDismissed.value = true;
+});
+watch(minimize, (minimized) => {
+  if (minimized) onboardingDismissed.value = true;
+});
+
 function setUpOnboarding() {
   if (!authStore.isManager) return;
   setUp(steps);
+  // Never open it over the customer portal either.
+  if (onboardingDismissed.value || isCustomerPortal.value) {
+    showHelpModal.value = false;
+  }
   useShortcut({ key: "h", meta: true }, () => {
     showHelpModal.value = !showHelpModal.value;
   });
