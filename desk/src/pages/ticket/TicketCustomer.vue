@@ -384,7 +384,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopViewing(props.ticketId);
-  document.title = "Helpdesk";
+  document.title = window.brand_name || "Helpdesk";
   $socket.off("helpdesk:ticket-update");
 });
 </script>

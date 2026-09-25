@@ -29,6 +29,8 @@
 </template>
 
 <script setup>
-import { Button, FeatherIcon } from "frappe-ui";
+import { Button, FeatherIcon, usePageMeta } from "frappe-ui";
 import { __ } from "@/translation";
+
+usePageMeta(() => ({ title: __("Page not found") }));
 </script>

@@ -153,6 +153,7 @@ import {
   GridLayout,
   LoadingIndicator,
   toast,
+  usePageMeta,
 } from "frappe-ui";
 import { storeToRefs } from "pinia";
 import { computed, ref } from "vue";
@@ -183,6 +184,7 @@ type DashboardResponse = {
 };
 
 const { userName, userId } = storeToRefs(useAuthStore());
+usePageMeta(() => ({ title: __("Home") }));
 const editing = ref(false);
 const layout = ref<LayoutItem[]>([]);
 const oldLayout = ref<LayoutItem[]>([]);

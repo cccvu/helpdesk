@@ -2,6 +2,7 @@ import frappe
 from frappe import _
 from frappe.integrations.frappe_providers.frappecloud_billing import is_fc_site
 from frappe.utils import cint, get_system_timezone
+from frappe.utils.change_log import get_source_url
 from frappe.utils.jinja_globals import is_rtl
 from frappe.utils.telemetry import capture
 
@@ -50,8 +51,25 @@ def get_boot():
             "dir": "rtl" if is_rtl() else "ltr",
             "apps": frappe.get_installed_apps(),
             "telemetry": get_telemetry_boot(),
+            **get_site_boot(),
         }
     )
+
+
+def get_site_boot():
+    """Site branding and sign-in settings, rendered into index.html so the tab
+    shows the site's name and icon before the app loads (None keeps the
+    upstream defaults)."""
+    return {
+        "brand_name": frappe.db.get_single_value("HD Settings", "brand_name"),
+        # Same precedence as helpdesk.api.config.get_config, minus its default.
+        "favicon": frappe.db.get_single_value("HD Settings", "favicon")
+        or frappe.db.get_single_value("Website Settings", "favicon"),
+        "disable_user_pass_login": cint(
+            frappe.get_system_settings("disable_user_pass_login")
+        ),
+        "source_url": get_source_url("helpdesk"),
+    }
 
 
 def get_default_route():

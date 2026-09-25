@@ -3,10 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Helpdesk</title>
+    <title>{{ (boot.brand_name or "Helpdesk") | e }}</title>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="Frappe Helpdesk" />
+    <meta
+      name="apple-mobile-web-app-title"
+      content="{{ (boot.brand_name or 'Frappe Helpdesk') | e }}"
+    />
     <meta name="apple-mobile-web-app-status-bar-style" content="white" />
 
     <!-- PWA -->
@@ -14,7 +17,7 @@
       rel="icon"
       type="image/png"
       sizes="196x196"
-      href="/assets/helpdesk/desk/manifest/apple-icon-180.png"
+      href="{{ (boot.favicon or '/assets/helpdesk/desk/manifest/apple-icon-180.png') | e }}"
     />
 
     <link
@@ -25,7 +28,7 @@
 
     <link
       rel="apple-touch-icon"
-      href="/assets/helpdesk/desk/manifest/apple-icon-180.png"
+      href="{{ (boot.favicon or '/assets/helpdesk/desk/manifest/apple-icon-180.png') | e }}"
     />
 
     <link

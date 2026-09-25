@@ -810,6 +810,10 @@ declare global {
     default_country: string;
     apps: string[];
     telemetry: { enabled: boolean };
+    brand_name: string | null;
+    favicon: string | null;
+    disable_user_pass_login: 0 | 1;
+    source_url: string | null;
   }
 }
 

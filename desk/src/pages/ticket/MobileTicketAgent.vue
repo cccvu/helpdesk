@@ -671,7 +671,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  document.title = "Helpdesk";
+  document.title = window.brand_name || "Helpdesk";
 });
 </script>
 <style scoped>
