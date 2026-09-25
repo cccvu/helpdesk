@@ -74,6 +74,7 @@ import {
   toast,
 } from "frappe-ui";
 import { computed, provide, ref, watch } from "vue";
+import { disableSettingModalOutsideClick } from "../settingsModal";
 import Branding from "./components/Branding.vue";
 import TicketSettings from "./components/TicketSettings.vue";
 import WorkflowKnowledgebaseSettings from "./components/WorkflowKnowledgebaseSettings.vue";
