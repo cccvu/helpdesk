@@ -172,8 +172,15 @@
                   <div
                     v-if="item.title"
                     class="text-base-medium truncate max-w-[60%]"
-                    v-html="item.title"
-                  />
+                  >
+                    <template
+                      v-for="(run, i) in titleRuns(item.title)"
+                      :key="i"
+                    >
+                      <mark v-if="run.match">{{ run.text }}</mark>
+                      <template v-else>{{ run.text }}</template>
+                    </template>
+                  </div>
                   <div class="text-base-medium" v-else>
                     {{ item.name }}
                   </div>
@@ -195,8 +202,15 @@
                 <div
                   v-if="item.content"
                   class="mt-1 text-p-base text-ink-gray-6"
-                  v-html="item.content"
-                ></div>
+                >
+                  <template
+                    v-for="(run, i) in titleRuns(item.content)"
+                    :key="i"
+                  >
+                    <mark v-if="run.match">{{ run.text }}</mark>
+                    <template v-else>{{ run.text }}</template>
+                  </template>
+                </div>
               </div>
             </router-link>
             <div class="border-b mx-2"></div>
@@ -210,6 +224,7 @@
 <script setup lang="ts">
 import { LayoutHeader } from "@/components";
 import SearchMultiSelect from "@/components/SearchMultiSelect.vue";
+import { titleRuns } from "@/components/command-palette/paletteTypes";
 import { useShortcut } from "@/composables/shortcuts";
 import { __ } from "@/translation";
 import {
