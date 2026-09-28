@@ -12,7 +12,14 @@ from frappe.desk.form.assign_to import get as get_assignees
 from frappe.email.email_body import get_message_id
 from frappe.model.document import Document
 from frappe.permissions import add_permission, update_permission_property
-from frappe.utils import add_to_date, cint, get_string_between, getdate, now_datetime
+from frappe.utils import (
+    add_to_date,
+    cint,
+    get_string_between,
+    getdate,
+    now_datetime,
+    validate_email_address,
+)
 from pypika.functions import Count
 from pypika.queries import Query
 from pypika.terms import Criterion
@@ -587,6 +594,45 @@ class HDTicket(Document):
         sender_email = frappe._dict(name=email_account_name, email_id=from_email_id)
         return sender_email, email_account_name
 
+    def _reply_to_address(self, default: str) -> str:
+        """Reply-To address for an agent reply on this ticket.
+
+        Renders HD Settings' `reply_to_template` with `doc` as this ticket, so each
+        ticket can get its own reply address, for example a plus address:
+
+            support+{{ doc.name }}@example.com
+
+        Returns `default` (the email account's address) when the template is empty,
+        fails to render, or does not produce a valid email address. A reply is never
+        blocked by the template.
+        """
+        template = frappe.db.get_single_value("HD Settings", "reply_to_template")
+        if not (template or "").strip():
+            return default
+
+        # render_template shows its own error dialog on a Jinja error; this is
+        # logged below and the reply goes on with the default address instead.
+        # `doc` is a plain dict, as for the email content templates, so the
+        # template can read the ticket but not call its methods.
+        mute_messages = frappe.flags.mute_messages
+        frappe.flags.mute_messages = True
+        try:
+            rendered = frappe.render_template(template, {"doc": self.as_dict()})
+            address = (rendered or "").strip()
+        except Exception:
+            frappe.log_error(
+                title=_("Reply-To template could not be rendered"),
+                reference_doctype="HD Ticket",
+                reference_name=self.name,
+            )
+            return default
+        finally:
+            frappe.flags.mute_messages = mute_messages
+
+        if not address or not validate_email_address(address, throw=False):
+            return default
+        return address
+
     def instantly_send_email(self):
         check: str = (
             frappe.get_value("HD Settings", None, "instantly_send_email") or "0"
@@ -801,7 +847,7 @@ class HDTicket(Document):
                 recipients=recipients,
                 reference_doctype="HD Ticket",
                 reference_name=self.name,
-                reply_to=reply_to_email,
+                reply_to=self._reply_to_address(reply_to_email),
                 sender=reply_to_email,
                 subject=subject,
                 with_container=False,
