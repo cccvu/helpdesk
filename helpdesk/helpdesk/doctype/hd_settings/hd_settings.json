@@ -82,7 +82,8 @@
   "reply_email_to_agent_content",
   "reply_from_agent_section",
   "enable_reply_email_via_agent",
-  "reply_via_agent_email_content"
+  "reply_via_agent_email_content",
+  "reply_to_template"
  ],
  "fields": [
   {
@@ -427,6 +428,13 @@
    "label": "Email Content"
   },
   {
+   "description": "Optional. A Jinja template for the Reply-To address of agent replies, rendered with <code>doc</code> as the HD Ticket. It must produce one email address, for example <code>support+{{ doc.name }}@example.com</code>. When it is empty, fails to render or does not produce a valid address, the email account's address is used.",
+   "fieldname": "reply_to_template",
+   "fieldtype": "Code",
+   "label": "Reply-To Template (agent replies)",
+   "options": "Jinja"
+  },
+  {
    "fieldname": "reply_from_contact_section",
    "fieldtype": "Section Break",
    "label": "Reply From Contact"
@@ -541,7 +549,7 @@
  "grid_page_length": 50,
  "issingle": 1,
  "links": [],
- "modified": "2026-07-10 14:58:15.922364",
+ "modified": "2026-09-28 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Helpdesk",
  "name": "HD Settings",

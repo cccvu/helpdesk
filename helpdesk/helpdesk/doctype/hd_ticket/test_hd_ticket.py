@@ -1,6 +1,7 @@
 # Copyright (c) 2023, Frappe Technologies and Contributors
 # See license.txt
 
+import hashlib
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -75,6 +76,48 @@ def sent_replies(ticket_name: str):
         fields=["name", "message_id", "in_reply_to"],
         order_by="creation asc",
     )
+
+
+REPLY_ACCOUNT_EMAIL = "reply-to-test@example.com"
+
+
+def send_reply_with_template(ticket, template: str | None):
+    """Email an agent reply on `ticket` with `template` as HD Settings'
+    reply_to_template, and return the kwargs frappe.sendmail was called with."""
+    email_account = frappe.get_doc(
+        {
+            "doctype": "Email Account",
+            "email_account_name": "Reply-To Test",
+            "email_id": REPLY_ACCOUNT_EMAIL,
+            "enable_outgoing": 1,
+            "smtp_server": "smtp.example.com",
+        }
+    ).insert(ignore_if_duplicate=True)
+
+    previous = frappe.db.get_value(
+        "HD Settings",
+        "HD Settings",
+        ["enable_reply_email_via_agent", "reply_to_template"],
+        as_dict=True,
+    )
+    frappe.db.set_single_value("HD Settings", "enable_reply_email_via_agent", 1)
+    frappe.db.set_single_value("HD Settings", "reply_to_template", template)
+    try:
+        with patch("frappe.sendmail") as sendmail:
+            ticket.reply_via_agent(
+                message="Reply",
+                to="customer@test.com",
+                from_email={
+                    "email_account": email_account.name,
+                    "email_id": REPLY_ACCOUNT_EMAIL,
+                },
+            )
+    finally:
+        # rollback is per test class, so restore or later tests inherit this
+        frappe.db.set_single_value("HD Settings", previous)
+
+    assert sendmail.called, "reply should have been emailed"
+    return sendmail.call_args.kwargs
 
 
 non_agent = "non_agent@test.com"
@@ -1264,6 +1307,61 @@ class TestHDTicket(FrappeTestCase):
             sendmail.call_args.kwargs.get("message_id"),
             communication.message_id,
             "wire Message-Id must match the one stored on the Communication",
+        )
+
+    def test_reply_to_uses_the_rendered_template(self):
+        ticket = make_ticket()
+        sent = send_reply_with_template(ticket, "support+{{ doc.name }}@example.com")
+        self.assertEqual(sent["reply_to"], f"support+{ticket.name}@example.com")
+        self.assertEqual(sent["sender"], REPLY_ACCOUNT_EMAIL, "sender is unchanged")
+
+    def test_reply_to_is_the_account_address_without_a_template(self):
+        ticket = make_ticket()
+        for template in (None, "", "  \n"):
+            sent = send_reply_with_template(ticket, template)
+            self.assertEqual(sent["reply_to"], REPLY_ACCOUNT_EMAIL, repr(template))
+            ticket.reload()
+
+    def test_reply_to_falls_back_and_logs_when_the_template_fails(self):
+        """A broken template must not block the reply, nor show an error to the agent."""
+        ticket = make_ticket()
+        error_logs = {"reference_doctype": "HD Ticket", "reference_name": ticket.name}
+        logged_before = frappe.db.count("Error Log", error_logs)
+        messages_before = len(frappe.get_message_log())
+
+        sent = send_reply_with_template(ticket, "support+{{ doc.name @example.com")
+
+        self.assertEqual(sent["reply_to"], REPLY_ACCOUNT_EMAIL)
+        self.assertEqual(len(frappe.get_message_log()), messages_before)
+        self.assertEqual(
+            frappe.db.count("Error Log", error_logs),
+            logged_before + 1,
+            "the failure is logged against the ticket",
+        )
+
+    def test_reply_to_falls_back_on_an_invalid_address(self):
+        ticket = make_ticket()
+        for template in ("not an address {{ doc.name }}", "{% if false %}x{% endif %}"):
+            sent = send_reply_with_template(ticket, template)
+            self.assertEqual(sent["reply_to"], REPLY_ACCOUNT_EMAIL, template)
+            ticket.reload()
+
+    def test_reply_to_template_can_sign_the_ticket_key(self):
+        """Jinja's sha256_hash is the same as Python's hashlib, so a service can
+        recompute the address from the ticket's key to check a reply is genuine."""
+        template = (
+            "{% if doc.key %}support+r1-{{ doc.name }}-"
+            '{{ frappe.utils.sha256_hash("salt:" ~ doc.key)[:26] }}'
+            "@example.com{% endif %}"
+        )
+        ticket = make_ticket()
+        self.assertTrue(ticket.key)
+        mac = hashlib.sha256(f"salt:{ticket.key}".encode()).hexdigest()[:26]
+
+        sent = send_reply_with_template(ticket, template)
+
+        self.assertEqual(
+            sent["reply_to"], f"support+r1-{ticket.name}-{mac}@example.com"
         )
 
     def test_portal_reply_does_not_break_agent_reply_threading(self):
