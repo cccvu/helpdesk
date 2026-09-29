@@ -487,6 +487,22 @@ def create_user(email: str):
     ).insert(ignore_permissions=True)
 
 
+def make_agent_manager(email: str, first_name: str = "Test Manager"):
+    """Create (or fetch) an agent who also has the Agent Manager role."""
+    make_agent(email, first_name=first_name)
+    frappe.get_doc("User", email).add_roles("Agent Manager")
+    return email
+
+
+def user_roles(email: str) -> set[str]:
+    """The user's roles as stored, bypassing the roles cache."""
+    return set(
+        frappe.get_all(
+            "Has Role", filters={"parent": email, "parenttype": "User"}, pluck="role"
+        )
+    )
+
+
 def get_invitation(email: str):
     """Return the helpdesk User Invitation raised for an email, if any."""
     return frappe.db.get_value(
