@@ -13,6 +13,7 @@ from helpdesk.api.ticket import bulk_reply
 from helpdesk.consts import DEFAULT_SLA
 from helpdesk.helpdesk.doctype.hd_ticket.api import (
     merge_ticket,
+    new,
     show_outside_hours_banner,
     split_ticket,
 )
@@ -2430,6 +2431,38 @@ class TestHDTicket(FrappeTestCase):
         self.assertTrue(has_permission(ticket, user=agent2))
         self.assertFalse(has_permission(ticket, user=agent))
         self.assertNotIn("Team B", permission_query(agent))
+
+    def test_agent_creates_ticket_for_requester(self):
+        frappe.set_user(agent)
+        ticket = new(
+            {
+                "subject": "For someone else",
+                "description": "x",
+                "raised_by": "requester@example.com",
+            }
+        )
+        frappe.set_user("Administrator")
+        self.assertEqual(ticket.raised_by, "requester@example.com")
+        self.assertEqual(ticket.owner, agent)
+
+    def test_agent_creates_ticket_without_requester(self):
+        frappe.set_user(agent)
+        ticket = new({"subject": "For myself", "description": "x", "raised_by": ""})
+        frappe.set_user("Administrator")
+        self.assertEqual(ticket.raised_by, agent)
+
+    def test_non_agent_cannot_raise_ticket_for_someone_else(self):
+        user_contact = create_contact("Test C1", CONTACTS[0])
+        frappe.set_user(user_contact.get("user"))
+        ticket = new(
+            {
+                "subject": "Spoof",
+                "description": "x",
+                "raised_by": "requester@example.com",
+            }
+        )
+        frappe.set_user("Administrator")
+        self.assertEqual(ticket.raised_by, user_contact.get("user"))
 
     def tearDown(self):
         frappe.set_user("Administrator")

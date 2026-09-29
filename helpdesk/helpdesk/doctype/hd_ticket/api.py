@@ -30,7 +30,10 @@ def new(doc: dict, attachments: list[dict] = []):
     doc["doctype"] = "HD Ticket"
     doc["via_customer_portal"] = bool(frappe.session.user)
     doc["attachments"] = attachments
-    doc["raised_by"] = frappe.session.user
+    # Agents may raise a ticket for someone else through the ticket template's
+    # raised_by field; anyone else raises it as themselves.
+    if not is_agent():
+        doc["raised_by"] = frappe.session.user
     d = frappe.get_doc(doc).insert()
     return d
 

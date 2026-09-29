@@ -62,11 +62,39 @@
                 </div>
               </div>
               <div class="flex flex-col gap-0.5 min-w-0">
-                <div v-if="!editName" class="flex items-center gap-1">
+                <div v-if="!editName" class="flex items-center gap-1 min-w-0">
                   <span class="text-lg font-semibold text-ink-gray-9 truncate">
                     {{ user?.doc?.full_name }}
                   </span>
+                  <Button
+                    class="!px-1 !h-5"
+                    variant="ghost"
+                    :label="__('Edit name')"
+                    @click="editFullName"
+                  >
+                    <EditIcon class="size-3.5" />
+                  </Button>
                 </div>
+                <div v-else class="flex items-center gap-1">
+                  <TextInput
+                    ref="fullNameRef"
+                    v-model="nameDraft"
+                    :aria-label="__('Full name')"
+                    @keydown.enter="saveName"
+                    @keydown.esc.stop="editName = false"
+                  />
+                  <Button
+                    variant="outline"
+                    icon="lucide-check"
+                    :label="__('Save name')"
+                    :loading="user?.save?.loading"
+                    :disabled="user?.save?.loading"
+                    @click="saveName"
+                  />
+                </div>
+                <span class="text-p-sm text-ink-gray-6 truncate">
+                  {{ user?.doc?.email }}
+                </span>
               </div>
             </div>
           </template>
@@ -168,7 +196,7 @@ const showChangePasswordModal = ref(false);
 // Sites that sign in by email link only have no password to change.
 const passwordLoginEnabled = !window.disable_user_pass_login;
 
-const { userId, hasAgentRecord } = useAuthStore();
+const { userId, hasAgentRecord, reloadUser } = useAuthStore();
 const user = createDocumentResource({ doctype: "User", name: userId });
 
 const isHoveringRemove = ref(false);
@@ -180,35 +208,43 @@ const profileTooltipText = computed(() => {
 });
 
 const fullNameRef = useTemplateRef("fullNameRef");
-const fullName = computed({
-  get: () => user.doc?.full_name ?? "",
-  set: (val) => {
-    if (!user.doc) return;
-    const [firstName, ...lastName] = val.split(" ");
-    user.doc.first_name = firstName;
-    user.doc.last_name = lastName.join(" ");
-  },
-});
+const fullName = computed(() => user.doc?.full_name ?? "");
+// The name being typed stays out of user.doc until it is saved, so an
+// abandoned edit is never sent with the next photo change.
+const nameDraft = ref("");
 
 function editFullName() {
+  nameDraft.value = fullName.value;
   editName.value = true;
   nextTick(() => fullNameRef.value?.el?.focus());
 }
 
-const isNameDirty = computed(() => {
-  return (
-    user.doc?.first_name !== user.originalDoc?.first_name ||
-    user.doc?.last_name !== user.originalDoc?.last_name
-  );
-});
+function saveName() {
+  const name = nameDraft.value.trim().replace(/\s+/g, " ");
+  if (!user.doc || !name) return;
+  if (name === fullName.value) {
+    editName.value = false;
+    return;
+  }
+  const [firstName, ...rest] = name.split(" ");
+  user.doc.first_name = firstName;
+  // The draft started from the full name, so it already holds any middle name.
+  user.doc.middle_name = "";
+  user.doc.last_name = rest.join(" ");
+  save();
+}
 
 function save() {
   user.save.submit(null, {
     onSuccess: () => {
       editName.value = false;
+      // The sidebar and other views read the name from the auth store.
+      reloadUser();
       toast.success(__("Profile updated successfully."));
     },
     onError: (err: { message: string; messages: string[] }) => {
+      // Drop the rejected values so a later save doesn't send them again.
+      user.reload();
       toast.error(err.message + ": " + err.messages[0]);
     },
   });
