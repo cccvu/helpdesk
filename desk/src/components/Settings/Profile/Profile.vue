@@ -62,11 +62,39 @@
                 </div>
               </div>
               <div class="flex flex-col gap-0.5 min-w-0">
-                <div v-if="!editName" class="flex items-center gap-1">
+                <div v-if="!editName" class="flex items-center gap-1 min-w-0">
                   <span class="text-lg font-semibold text-ink-gray-9 truncate">
                     {{ user?.doc?.full_name }}
                   </span>
+                  <Button
+                    class="!px-1 !h-5"
+                    variant="ghost"
+                    :label="__('Edit name')"
+                    @click="editFullName"
+                  >
+                    <EditIcon class="size-3.5" />
+                  </Button>
                 </div>
+                <div v-else class="flex items-center gap-1">
+                  <TextInput
+                    ref="fullNameRef"
+                    v-model="nameDraft"
+                    :aria-label="__('Full name')"
+                    @keydown.enter="saveName"
+                    @keydown.esc.stop="editName = false"
+                  />
+                  <Button
+                    variant="outline"
+                    icon="lucide-check"
+                    :label="__('Save name')"
+                    :loading="user?.save?.loading"
+                    :disabled="user?.save?.loading"
+                    @click="saveName"
+                  />
+                </div>
+                <span class="text-p-sm text-ink-gray-6 truncate">
+                  {{ user?.doc?.email }}
+                </span>
               </div>
             </div>
           </template>
@@ -180,27 +208,32 @@ const profileTooltipText = computed(() => {
 });
 
 const fullNameRef = useTemplateRef("fullNameRef");
-const fullName = computed({
-  get: () => user.doc?.full_name ?? "",
-  set: (val) => {
-    if (!user.doc) return;
-    const [firstName, ...lastName] = val.split(" ");
-    user.doc.first_name = firstName;
-    user.doc.last_name = lastName.join(" ");
-  },
-});
+const fullName = computed(() => user.doc?.full_name ?? "");
+// The name being typed stays out of user.doc until it is saved, so an
+// abandoned edit is never sent with the next photo change.
+const nameDraft = ref("");
 
 function editFullName() {
+  nameDraft.value = fullName.value;
   editName.value = true;
   nextTick(() => fullNameRef.value?.el?.focus());
 }
 
-const isNameDirty = computed(() => {
-  return (
-    user.doc?.first_name !== user.originalDoc?.first_name ||
-    user.doc?.last_name !== user.originalDoc?.last_name
-  );
-});
+function saveName() {
+  const [firstName, ...rest] = nameDraft.value.trim().split(/\s+/);
+  const lastName = rest.join(" ");
+  if (!user.doc || !firstName) return;
+  if (
+    firstName === user.doc.first_name &&
+    lastName === (user.doc.last_name ?? "")
+  ) {
+    editName.value = false;
+    return;
+  }
+  user.doc.first_name = firstName;
+  user.doc.last_name = lastName;
+  save();
+}
 
 function save() {
   user.save.submit(null, {
