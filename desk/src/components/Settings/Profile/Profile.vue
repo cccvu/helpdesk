@@ -196,7 +196,7 @@ const showChangePasswordModal = ref(false);
 // Sites that sign in by email link only have no password to change.
 const passwordLoginEnabled = !window.disable_user_pass_login;
 
-const { userId, hasAgentRecord } = useAuthStore();
+const { userId, hasAgentRecord, reloadUser } = useAuthStore();
 const user = createDocumentResource({ doctype: "User", name: userId });
 
 const isHoveringRemove = ref(false);
@@ -220,18 +220,17 @@ function editFullName() {
 }
 
 function saveName() {
-  const [firstName, ...rest] = nameDraft.value.trim().split(/\s+/);
-  const lastName = rest.join(" ");
-  if (!user.doc || !firstName) return;
-  if (
-    firstName === user.doc.first_name &&
-    lastName === (user.doc.last_name ?? "")
-  ) {
+  const name = nameDraft.value.trim().replace(/\s+/g, " ");
+  if (!user.doc || !name) return;
+  if (name === fullName.value) {
     editName.value = false;
     return;
   }
+  const [firstName, ...rest] = name.split(" ");
   user.doc.first_name = firstName;
-  user.doc.last_name = lastName;
+  // The draft started from the full name, so it already holds any middle name.
+  user.doc.middle_name = "";
+  user.doc.last_name = rest.join(" ");
   save();
 }
 
@@ -239,9 +238,13 @@ function save() {
   user.save.submit(null, {
     onSuccess: () => {
       editName.value = false;
+      // The sidebar and other views read the name from the auth store.
+      reloadUser();
       toast.success(__("Profile updated successfully."));
     },
     onError: (err: { message: string; messages: string[] }) => {
+      // Drop the rejected values so a later save doesn't send them again.
+      user.reload();
       toast.error(err.message + ": " + err.messages[0]);
     },
   });
