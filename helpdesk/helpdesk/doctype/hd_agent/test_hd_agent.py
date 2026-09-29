@@ -4,17 +4,25 @@
 from unittest.mock import patch
 
 import frappe
+from frappe.client import insert as client_insert
+from frappe.client import rename_doc as client_rename_doc
 from frappe.client import set_value as client_set_value
+from frappe.share import add as share_add
 from frappe.tests.utils import FrappeTestCase
 
+from helpdesk.api.agent import sent_invites
 from helpdesk.api.auth import get_user
 from helpdesk.helpdesk.doctype.hd_agent.hd_agent import update_agent_role
+from helpdesk.setup.setup_wizard import setup_complete
 from helpdesk.test_utils import (
+    create_user,
     make_agent,
+    make_agent_manager,
     make_team,
     make_ticket,
     set_agent_availability,
     set_agent_status_enabled,
+    user_roles,
 )
 
 
@@ -382,3 +390,183 @@ class TestHDAgent(FrappeTestCase):
             "HD Team", filters={"name": ["like", "Test AR%"]}, pluck="name"
         ):
             frappe.delete_doc("HD Team", team, force=True, ignore_permissions=True)
+
+
+class TestHDAgentCreation(FrappeTestCase):
+    """Only agent managers make someone else an agent.
+
+    An HD Agent row makes its user an agent (is_agent() looks it up by name),
+    and inserting one grants the Agent role, so every route to a row named
+    after another user must be closed to plain agents.
+    """
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        # One agent per test: a route that works would move the row away.
+        self.agent = make_agent(
+            f"{self._testMethodName}@agent.test", first_name="Plain Agent"
+        )
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def assertNotAgent(self, user: str):
+        self.assertFalse(frappe.db.exists("HD Agent", user))
+        self.assertFalse(frappe.db.exists("HD Agent", {"user": user}))
+        self.assertNotIn("Agent", user_roles(user))
+
+    def assertAgent(self, user: str):
+        self.assertEqual(frappe.db.get_value("HD Agent", user, "user"), user)
+        self.assertIn("Agent", user_roles(user))
+
+    def _insert_agent_as(self, actor: str, user: str):
+        frappe.set_user(actor)
+        try:
+            return client_insert(
+                {"doctype": "HD Agent", "user": user, "agent_name": "New Agent"}
+            )
+        finally:
+            frappe.set_user("Administrator")
+
+    def test_agent_cannot_create_agent_for_another_user(self):
+        victim = create_user("creation_victim_insert@test.com").name
+
+        with self.assertRaises(frappe.PermissionError):
+            self._insert_agent_as(self.agent, victim)
+
+        self.assertNotAgent(victim)
+
+    def test_agent_cannot_invite_agents(self):
+        victim = create_user("creation_victim_invite@test.com").name
+        frappe.set_user(self.agent)
+
+        with self.assertRaises(frappe.PermissionError):
+            sent_invites([victim], send_welcome_mail_to_user=False)
+
+        frappe.set_user("Administrator")
+        self.assertNotAgent(victim)
+
+    def test_agent_manager_can_create_agent_for_another_user(self):
+        manager = make_agent_manager("creation_manager@test.com")
+        user = create_user("creation_by_manager@test.com").name
+
+        self._insert_agent_as(manager, user)
+
+        self.assertAgent(user)
+
+    def test_agent_manager_can_still_invite_existing_users(self):
+        manager = make_agent_manager("creation_inviting_manager@test.com")
+        user = create_user("creation_invited_by_manager@test.com").name
+        frappe.set_user(manager)
+
+        sent_invites([user], send_welcome_mail_to_user=False)
+
+        frappe.set_user("Administrator")
+        self.assertAgent(user)
+
+    def test_system_manager_can_create_agent_for_another_user(self):
+        admin = create_user("creation_system_manager@test.com")
+        admin.add_roles("System Manager")
+        user = create_user("creation_by_system_manager@test.com").name
+
+        self._insert_agent_as(admin.name, user)
+
+        self.assertAgent(user)
+
+    # an agent whose row is missing (the role was granted by hand) may add it
+    def test_agent_can_create_their_own_missing_record(self):
+        user = create_user("creation_self@test.com")
+        user.add_roles("Agent")
+
+        self._insert_agent_as(user.name, user.name)
+
+        self.assertAgent(user.name)
+
+    def test_agent_cannot_move_their_record_to_another_user(self):
+        victim = create_user("creation_victim_move@test.com").name
+        frappe.set_user(self.agent)
+
+        with self.assertRaises(frappe.PermissionError):
+            client_set_value("HD Agent", self.agent, "user", victim)
+
+        frappe.set_user("Administrator")
+        self.assertNotAgent(victim)
+        self.assertEqual(
+            frappe.db.get_value("HD Agent", self.agent, "user"), self.agent
+        )
+
+    # sharing their own row with write access overrides the per-record check,
+    # so the user must be fixed by the controller, not only by permissions
+    def test_sharing_does_not_let_an_agent_move_their_record(self):
+        victim = create_user("creation_victim_share@test.com").name
+        frappe.set_user(self.agent)
+        share_add("HD Agent", self.agent, self.agent, write=1)
+
+        with self.assertRaises(frappe.ValidationError):
+            client_set_value("HD Agent", self.agent, "user", victim)
+
+        frappe.set_user("Administrator")
+        self.assertNotAgent(victim)
+        self.assertEqual(
+            frappe.db.get_value("HD Agent", self.agent, "user"), self.agent
+        )
+
+    # managers can't move a row either: it would leave its old user half an agent
+    def test_manager_cannot_move_an_agent_to_another_user(self):
+        user = create_user("creation_move_by_manager@test.com").name
+        agent = frappe.get_doc("HD Agent", self.agent)
+        agent.user = user
+
+        with self.assertRaises(frappe.ValidationError):
+            agent.save()
+
+        self.assertNotAgent(user)
+
+    def test_agent_cannot_rename_their_record_to_another_user(self):
+        victim = create_user("creation_victim_rename@test.com").name
+        frappe.set_user(self.agent)
+
+        with self.assertRaises(frappe.ValidationError):
+            client_rename_doc("HD Agent", self.agent, victim)
+
+        frappe.set_user("Administrator")
+        self.assertNotAgent(victim)
+        self.assertTrue(frappe.db.exists("HD Agent", self.agent))
+
+    # after a user's email changes, their row can still be renamed to match
+    def test_record_can_be_renamed_to_its_user(self):
+        old = make_agent("creation_old_email@test.com", first_name="Renamed")
+        new = "creation_new_email@test.com"
+        frappe.rename_doc("User", old, new)
+        self.assertEqual(frappe.db.get_value("HD Agent", old, "user"), new)
+
+        frappe.rename_doc("HD Agent", old, new)
+
+        self.assertAgent(new)
+        self.assertFalse(frappe.db.exists("HD Agent", old))
+
+    def test_accepted_agent_invitation_creates_agent(self):
+        email = "creation_invitee@test.com"
+        invitation = frappe.get_doc(
+            {
+                "doctype": "User Invitation",
+                "email": email,
+                "app_name": "helpdesk",
+                "redirect_to_path": "/helpdesk",
+                "roles": [{"role": "Agent"}],
+            }
+        ).insert()
+
+        # frappe.core.api.user_invitation.accept_invitation, as a guest
+        frappe.set_user("Guest")
+        invitation.accept(ignore_permissions=True)
+        frappe.set_user("Administrator")
+
+        self.assertAgent(email)
+
+    def test_setup_wizard_creates_first_agent(self):
+        user = create_user("creation_setup@test.com").name
+
+        setup_complete({"email": user})
+
+        self.assertAgent(user)

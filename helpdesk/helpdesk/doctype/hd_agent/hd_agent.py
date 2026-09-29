@@ -15,6 +15,7 @@ class HDAgent(Document):
             self.availability = get_active_status()
 
     def validate(self):
+        self.validate_user_unchanged()
         self.validate_availability()
 
     def before_save(self):
@@ -47,6 +48,26 @@ class HDAgent(Document):
     def on_update(self):
         self.publish_availability_update()
         self.capture_availability_telemetry()
+
+    def before_rename(self, old: str, new: str, merge: bool = False):
+        # An agent is named after its user (before_save), and lookups such as
+        # is_agent() rely on it. Renaming to the user heals a stale name.
+        if new != self.user:
+            frappe.throw(
+                _("An agent can only be renamed to its user, {0}.").format(self.user)
+            )
+
+    def validate_user_unchanged(self):
+        """An agent's user is fixed once the agent exists.
+
+        Changing it would make the new user an agent (before_save grants the
+        Agent role) without the create permission a new agent needs. Checked
+        here rather than by permissions, which a share with write overrides.
+        """
+        if not self.is_new() and self.has_value_changed("user"):
+            frappe.throw(
+                _("An agent's user can't be changed. Add a new agent instead.")
+            )
 
     def validate_availability(self):
         """Only an enabled HD Agent Status may be set as availability.
@@ -104,12 +125,12 @@ class HDAgent(Document):
 def has_permission(doc: Document, ptype: str, user: str) -> bool:
     """Per-record access for HD Agent.
 
-    An agent may only modify their own record — the Agent role grants blanket
-    write on the doctype, which is what let one agent edit another's. Reads stay
-    open so presence dots and assignment pickers can still list every agent, and
-    managers are unrestricted.
+    An agent may only create or modify their own record — the Agent role grants
+    blanket create and write on the doctype, which is what let one agent edit
+    another's, or make any user an agent. Reads stay open so presence dots and
+    assignment pickers can still list every agent, and managers are unrestricted.
     """
-    if ptype not in ("write", "delete"):
+    if ptype not in ("create", "write", "delete"):
         return True
 
     return is_agent_manager(user) or doc.user == user
