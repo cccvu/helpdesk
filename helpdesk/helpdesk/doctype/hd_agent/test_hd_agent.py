@@ -47,6 +47,38 @@ class TestHDAgent(FrappeTestCase):
             value=availability,
         )
 
+    def test_agent_renaming_themselves_updates_agent_name(self):
+        # Start from a known name: other tests in this module commit.
+        frappe.db.set_value(
+            "User", self.test_user, {"first_name": "Test", "last_name": "User"}
+        )
+        frappe.db.set_value("HD Agent", self.test_user, "agent_name", "Test User")
+        frappe.set_user(self.test_user)
+        client_set_value(
+            "User", self.test_user, {"first_name": "Jane", "last_name": "Doe"}
+        )
+        frappe.set_user("Administrator")
+        self.assertEqual(
+            frappe.db.get_value("HD Agent", self.test_user, "agent_name"), "Jane Doe"
+        )
+
+    def test_agent_cannot_rename_another_agent(self):
+        other = make_agent("rename_other@test.com", first_name="Other Agent")
+        frappe.set_user(self.test_user)
+        with self.assertRaises(frappe.PermissionError):
+            client_set_value("User", other, "first_name", "Renamed")
+
+    def test_agent_name_change_still_renames_user(self):
+        client_set_value("HD Agent", self.test_user, "agent_name", "Mary Ann Smith")
+        user = frappe.db.get_value(
+            "User", self.test_user, ["first_name", "last_name"], as_dict=True
+        )
+        self.assertEqual((user.first_name, user.last_name), ("Mary", "Ann Smith"))
+        self.assertEqual(
+            frappe.db.get_value("HD Agent", self.test_user, "agent_name"),
+            "Mary Ann Smith",
+        )
+
     # a new agent defaults to the Active-category status (looked up, not hardcoded)
     def test_new_agent_defaults_to_active_status(self):
         agent = make_agent("defaults_active@test.com", first_name="Defaults Active")

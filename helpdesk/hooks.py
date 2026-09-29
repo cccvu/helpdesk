@@ -100,6 +100,9 @@ doc_events = {
     "Notification Log": {
         "before_insert": "helpdesk.extends.notification_log.before_insert",
     },
+    "User": {
+        "on_update": "helpdesk.extends.user.sync_agent_name",
+    },
 }
 
 # For List View
