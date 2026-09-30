@@ -182,7 +182,7 @@ class HDTicket(Document):
         self.tag_first_ticket()
 
         if self.get("description"):
-            self.create_communication_via_contact(self.description, new_ticket=True)
+            self._create_communication_via_contact(self.description, new_ticket=True)
             self.handle_inline_media_new_ticket()
 
         send_ack_email = frappe.db.get_single_value(
@@ -863,14 +863,22 @@ class HDTicket(Document):
             communication.db_set("message_id", message_id)
 
     @frappe.whitelist()
-    # flake8: noqa
     def create_communication_via_contact(
+        self, message: str, attachments: list[dict] = []
+    ):
+        # run_doc_method can build this document from the request and checks read
+        # permission on that copy. The reply saves with ignore_permissions, so check
+        # and work on the stored ticket, never a client-built or unsaved one.
+        if self.is_new():
+            frappe.throw(_("Not permitted"), frappe.PermissionError)
+        frappe.has_permission("HD Ticket", "read", self.name, throw=True)
+        self.reload()
+        self._create_communication_via_contact(message, attachments)
+
+    # flake8: noqa
+    def _create_communication_via_contact(
         self, message: str, attachments: list[dict] = [], new_ticket: bool = False
     ):
-        if not new_ticket:
-            # run_doc_method can pass a client-built copy of the ticket, and this saves
-            # with ignore_permissions: work on the stored ticket, not the client's copy.
-            self.reload()
         if not new_ticket and frappe.db.get_single_value(
             "HD Settings", "enable_reply_email_to_agent"
         ):
