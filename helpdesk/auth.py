@@ -83,6 +83,14 @@ def authenticate():
     if user_type == "System User":
         return
 
+    if path == "/api/method/run_doc_method" and frappe.form_dict.get("docs"):
+        # run_doc_method builds the document from `docs` and checks permission on that
+        # copy, so a caller could name any record. Portal pages call it by dt/dn only.
+        frappe.throw(
+            "Run a document method by doctype and name (dt, dn), not a client-built document",
+            frappe.PermissionError,
+        )
+
     if not path.startswith("/api/"):
         return
 
