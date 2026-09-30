@@ -18,7 +18,7 @@
         @change="
           emitUpdate(
             field.fieldname,
-            $event.target?.value || $event.value || $event
+            $event?.target?.value ?? $event?.value ?? $event
           )
         "
       />

@@ -252,6 +252,7 @@ export interface Field {
   options: string;
   required: 0 | 1;
   description?: null;
+  default?: string | null;
   url_method?: string;
   link_filters?: string;
   filters?: string;

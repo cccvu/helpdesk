@@ -206,7 +206,9 @@ const template = createResource({
 
 function setupTemplateFields(fields) {
   fields.forEach((field: Field) => {
-    templateFields[field.fieldname] = "";
+    // A Check starts at its default, as a number like the Yes/No options.
+    templateFields[field.fieldname] =
+      field.fieldtype === "Check" ? (Number(field.default) ? 1 : 0) : "";
   });
 }
 
