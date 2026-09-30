@@ -428,10 +428,10 @@
    "label": "Email Content"
   },
   {
-   "description": "Optional. A Jinja template for the Reply-To address of agent replies, rendered with <code>doc</code> as the HD Ticket. It must produce one email address, for example <code>support+{{ doc.name }}@example.com</code>. When it is empty, fails to render or does not produce a valid address, the email account's address is used.",
+   "description": "Optional. A Jinja template for the Reply-To address of agent replies and of the acknowledgement email, rendered with <code>doc</code> as the HD Ticket. It must produce one email address, for example <code>support+{{ doc.name }}@example.com</code>. When it is empty, fails to render or does not produce a valid address, an agent reply uses the email account's address and the acknowledgement email uses its sender's.",
    "fieldname": "reply_to_template",
    "fieldtype": "Code",
-   "label": "Reply-To Template (agent replies)",
+   "label": "Reply-To Template",
    "options": "Jinja"
   },
   {
@@ -549,7 +549,7 @@
  "grid_page_length": 50,
  "issingle": 1,
  "links": [],
- "modified": "2026-09-28 12:00:00.000000",
+ "modified": "2026-09-30 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Helpdesk",
  "name": "HD Settings",
