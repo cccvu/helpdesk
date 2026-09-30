@@ -70,6 +70,13 @@ class TestKeepRedirectOnSite(FrappeTestCase):
                 keep_redirect_on_site(doc)
                 self.assertEqual(doc.redirect_to_path, "/helpdesk")
 
+    def test_normalizes_a_redirect_get_url_cannot_parse(self) -> None:
+        doc = make_invitation("///[evil.example")
+        with self.assertRaises(ValueError):
+            frappe.utils.get_url(doc.get_redirect_to_path())
+        keep_redirect_on_site(doc)
+        self.assertEqual(doc.redirect_to_path, "/helpdesk")
+
     def test_fills_a_missing_redirect(self) -> None:
         for value in ("", None):
             with self.subTest(value=value):

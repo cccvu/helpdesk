@@ -21,6 +21,10 @@ def keep_redirect_on_site(doc, method=None):
         return
 
     base = get_url()
-    target = get_url(doc.get_redirect_to_path())
+    try:
+        target = get_url(doc.get_redirect_to_path())
+    except ValueError:  # urljoin refuses a malformed host, such as "//[x"
+        doc.redirect_to_path = DEFAULT_REDIRECT_TO_PATH
+        return
     if target != base and not target.startswith(base.rstrip("/") + "/"):
         doc.redirect_to_path = DEFAULT_REDIRECT_TO_PATH
