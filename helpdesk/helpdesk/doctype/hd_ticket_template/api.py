@@ -94,6 +94,7 @@ def get_fields(template: str, fetch: Literal["Custom Field", "DocField"]):
         frappe.qb.from_(fields)
         .select(
             QBFetch.description,
+            QBFetch["default"],
             QBFetch.fieldtype,
             QBFetch.label,
             QBFetch.options,
@@ -113,7 +114,7 @@ def get_fields(template: str, fetch: Literal["Custom Field", "DocField"]):
         .orderby(fields.idx)
         .run(as_dict=True)
     )
-    docfields = ["link_filters", "depends_on", "mandatory_depends_on"]
+    docfields = ["link_filters", "depends_on", "mandatory_depends_on", "default"]
 
     for df in docfields:
         for field in result:

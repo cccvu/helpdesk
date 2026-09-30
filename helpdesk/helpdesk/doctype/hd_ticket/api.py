@@ -336,6 +336,8 @@ def merge_ticket(source: str, target: str):
     if source == target:
         frappe.throw(_("Source and target ticket cannot be same"))
 
+    copy_custom_check_flags(source, target)
+
     controller = get_controller("HD Ticket")
 
     source_comments = frappe.db.get_list(
@@ -386,6 +388,27 @@ def merge_ticket(source: str, target: str):
         f"Ticket <a href={source_link}> #{source}</a>  has been merged with ticket #{target}."
     )
     c.save()
+
+
+def copy_custom_check_flags(source: str, target: str):
+    """Set on the target every custom Check field that is set on the source.
+
+    Merging copies the source's conversation into the target, so a flag set on
+    the source (a restriction, for example) must stay set on the target. Flags
+    are only ever set, never cleared, and the target's hooks don't run again.
+    """
+    flags = [
+        df.fieldname
+        for df in frappe.get_meta("HD Ticket").get_custom_fields()
+        if df.fieldtype == "Check"
+    ]
+    if not flags:
+        return
+    on_source = frappe.db.get_value("HD Ticket", source, flags, as_dict=True)
+    on_target = frappe.db.get_value("HD Ticket", target, flags, as_dict=True)
+    to_set = {f: 1 for f in flags if on_source.get(f) and not on_target.get(f)}
+    if to_set:
+        frappe.db.set_value("HD Ticket", target, to_set)
 
 
 def duplicate_list_retain_timestamp(doctype, activities: list, target: str, controller):

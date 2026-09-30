@@ -206,7 +206,9 @@ const template = createResource({
 
 function setupTemplateFields(fields) {
   fields.forEach((field: Field) => {
-    templateFields[field.fieldname] = "";
+    // A Check starts at its default, as a number like the Yes/No options.
+    templateFields[field.fieldname] =
+      field.fieldtype === "Check" ? (Number(field.default) ? 1 : 0) : "";
   });
 }
 
@@ -265,6 +267,8 @@ const ticket = createResource({
     const fields = visibleFields.value?.filter((f) => f.required) || [];
     const toVerify = [...fields, "subject", "description"];
     for (const field of toVerify) {
+      // a Check always holds 0 or 1, and 0 ("No") is a valid answer
+      if (field.fieldtype === "Check") continue;
       if (!params.doc[field.fieldname || field]) {
         return `${field.label || field} is required`;
       }
