@@ -867,6 +867,10 @@ class HDTicket(Document):
     def create_communication_via_contact(
         self, message: str, attachments: list[dict] = [], new_ticket: bool = False
     ):
+        if not new_ticket:
+            # run_doc_method can pass a client-built copy of the ticket, and this saves
+            # with ignore_permissions: work on the stored ticket, not the client's copy.
+            self.reload()
         if not new_ticket and frappe.db.get_single_value(
             "HD Settings", "enable_reply_email_to_agent"
         ):

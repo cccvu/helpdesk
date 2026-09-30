@@ -1366,6 +1366,16 @@ class TestHDTicket(FrappeTestCase):
             sent["reply_to"], f"support+r1-{ticket.name}-{mac}@example.com"
         )
 
+    def test_portal_reply_saves_the_stored_ticket_not_the_callers_copy(self):
+        """run_doc_method builds the document from the request; the reply must not save it."""
+        ticket = make_ticket()
+        copy = frappe.get_doc(ticket.as_dict())
+        copy.subject = "Changed by the caller"
+        copy.create_communication_via_contact(message="Customer portal reply")
+        self.assertEqual(
+            frappe.db.get_value("HD Ticket", ticket.name, "subject"), ticket.subject
+        )
+
     def test_portal_reply_does_not_break_agent_reply_threading(self):
         """A portal reply sent no email, so replies after it must skip past it."""
         ticket = make_ticket()
