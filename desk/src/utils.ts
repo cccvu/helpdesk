@@ -795,7 +795,8 @@ export function parseApiOptions(
 }
 
 export function openContact(name: string) {
-  const url = window.location.origin + "/helpdesk/contacts/" + name;
+  const url =
+    window.location.origin + "/helpdesk/contacts/" + encodeURIComponent(name);
   window.open(url, "_blank");
 }
 

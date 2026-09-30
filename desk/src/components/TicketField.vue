@@ -264,7 +264,10 @@ function emitUpdate(fieldname: Field["fieldname"], value: FieldValue) {
 function handleRedirect(value: string) {
   const route = REDIRECT_ROUTES[props.field.options];
   if (!route) return;
-  window.open(`${window.location.origin}/helpdesk/${route}/${value}`, "_blank");
+  window.open(
+    `${window.location.origin}/helpdesk/${route}/${encodeURIComponent(value)}`,
+    "_blank"
+  );
 }
 </script>
 <style scoped>
