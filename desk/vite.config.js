@@ -54,6 +54,12 @@ export default defineConfig(async ({ mode }) => {
         workbox: {
           cleanupOutdatedCaches: true,
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          // The worker's scope is /assets/helpdesk/desk/, so it never
+          // controls a /helpdesk page and a precache would only be
+          // downloaded, never served. With nothing precached there is no
+          // index.html for a navigation fallback either.
+          globPatterns: [],
+          navigateFallback: null,
         },
         manifest: {
           display: "standalone",
