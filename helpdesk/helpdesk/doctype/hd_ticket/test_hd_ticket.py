@@ -6,6 +6,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_to_date, get_datetime, getdate, now_datetime
 
@@ -2469,3 +2470,42 @@ class TestHDTicket(FrappeTestCase):
         remove_holidays()
         frappe.db.set_single_value("HD Settings", "default_ticket_status", "Open")
         frappe.delete_doc("HD Ticket Status", "New", force=True)
+
+
+MERGE_FLAG = "test_merge_flag"
+
+
+class TestMergeKeepsCustomFlags(FrappeTestCase):
+    """A custom Check field set on a merged ticket stays set on its target."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Adding a column is DDL, which commits: do it once for the class.
+        create_custom_field(
+            "HD Ticket",
+            {"fieldname": MERGE_FLAG, "label": "Test Merge Flag", "fieldtype": "Check"},
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        frappe.db.rollback()
+        frappe.delete_doc("Custom Field", f"HD Ticket-{MERGE_FLAG}", force=True)
+        frappe.db.commit()
+        super().tearDownClass()
+
+    def test_merge_sets_flag_from_source(self):
+        source = make_ticket(description="Flagged source", **{MERGE_FLAG: 1})
+        target = make_ticket(description="Unflagged target")
+
+        merge_ticket(source=source.name, target=target.name)
+
+        self.assertEqual(frappe.db.get_value("HD Ticket", target.name, MERGE_FLAG), 1)
+
+    def test_merge_never_clears_flag_on_target(self):
+        source = make_ticket(description="Unflagged source")
+        target = make_ticket(description="Flagged target", **{MERGE_FLAG: 1})
+
+        merge_ticket(source=source.name, target=target.name)
+
+        self.assertEqual(frappe.db.get_value("HD Ticket", target.name, MERGE_FLAG), 1)
