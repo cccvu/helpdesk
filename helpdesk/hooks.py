@@ -103,6 +103,9 @@ doc_events = {
     "User": {
         "on_update": "helpdesk.extends.user.sync_agent_name",
     },
+    "User Invitation": {
+        "validate": "helpdesk.extends.user_invitation.keep_redirect_on_site",
+    },
 }
 
 # For List View
