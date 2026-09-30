@@ -4,6 +4,7 @@
 import hashlib
 from contextlib import contextmanager
 from datetime import timedelta
+from email import message_from_string
 from unittest.mock import patch
 
 import frappe
@@ -152,17 +153,32 @@ def new_error_logs(before: set[str]) -> list[dict]:
 
 
 @contextmanager
-def acknowledgement_on():
-    """Turn on HD Settings' acknowledgement email, and restore the settings after."""
+def acknowledgement_on(template: str | None = None):
+    """Turn on HD Settings' acknowledgement email with `template` as its
+    reply_to_template, and restore the settings after."""
     previous = frappe.db.get_value(
-        "HD Settings", "HD Settings", ["send_acknowledgement_email"], as_dict=True
+        "HD Settings",
+        "HD Settings",
+        ["send_acknowledgement_email", "reply_to_template"],
+        as_dict=True,
     )
     frappe.db.set_single_value("HD Settings", "send_acknowledgement_email", 1)
+    frappe.db.set_single_value("HD Settings", "reply_to_template", template)
     try:
         yield
     finally:
         # rollback is per test class, so restore or later tests inherit this
         frappe.db.set_single_value("HD Settings", previous)
+
+
+def acknowledge_new_ticket(template: str | None):
+    """Create a ticket with the acknowledgement on and `template` as
+    reply_to_template; return it and the kwargs its acknowledgement was sent with."""
+    with acknowledgement_on(template), patch("frappe.sendmail") as sendmail:
+        ticket = make_ticket()
+    sent = acknowledgements(sendmail)
+    assert len(sent) == 1, f"expected one acknowledgement, got {len(sent)}"
+    return ticket, sent[0]
 
 
 non_agent = "non_agent@test.com"
@@ -1409,6 +1425,49 @@ class TestHDTicket(FrappeTestCase):
             sent["reply_to"], f"support+r1-{ticket.name}-{mac}@example.com"
         )
 
+    def test_acknowledgement_reply_to_uses_the_rendered_template(self):
+        ticket, sent = acknowledge_new_ticket("support+{{ doc.name }}@example.com")
+        self.assertEqual(sent["reply_to"], f"support+{ticket.name}@example.com")
+        self.assertEqual(sent["recipients"], [ticket.raised_by])
+
+    def test_acknowledgement_reply_to_can_sign_the_ticket_key(self):
+        """The acknowledgement is sent after insert, so it signs the stored key."""
+        template = (
+            "{% if doc.key %}support+r1-{{ doc.name }}-"
+            '{{ frappe.utils.sha256_hash("salt:" ~ doc.key)[:26] }}'
+            "@example.com{% endif %}"
+        )
+        ticket, sent = acknowledge_new_ticket(template)
+
+        key = frappe.db.get_value("HD Ticket", ticket.name, "key")
+        self.assertTrue(key)
+        mac = hashlib.sha256(f"salt:{key}".encode()).hexdigest()[:26]
+        self.assertEqual(
+            sent["reply_to"], f"support+r1-{ticket.name}-{mac}@example.com"
+        )
+
+    def test_acknowledgement_has_no_reply_to_without_a_template(self):
+        """Frappe then uses the sender, as it did before the template existed."""
+        for template in (None, "", "  \n"):
+            _, sent = acknowledge_new_ticket(template)
+            self.assertIsNone(sent["reply_to"], repr(template))
+
+    def test_acknowledgement_reply_to_falls_back_and_logs_when_the_template_fails(
+        self,
+    ):
+        before = set(frappe.get_all("Error Log", pluck="name"))
+        ticket, sent = acknowledge_new_ticket("support+{{ doc.name @example.com")
+
+        self.assertIsNone(sent["reply_to"])
+        self.assertEqual(
+            [
+                (log.method, log.reference_doctype, log.reference_name)
+                for log in new_error_logs(before)
+            ],
+            [("Reply-To template could not be rendered", "HD Ticket", ticket.name)],
+            "the template failure is logged once against the ticket",
+        )
+
     def test_acknowledgement_failure_does_not_block_the_ticket(self):
         """A mail error is logged against the ticket, and the ticket is still created."""
 
@@ -1459,7 +1518,7 @@ class TestHDTicket(FrappeTestCase):
         """The acknowledgement goes through the email queue and never commits the
         ticket's transaction half way through its creation."""
         with (
-            acknowledgement_on(),
+            acknowledgement_on("support+{{ doc.name }}@example.com"),
             patch("frappe.are_emails_muted", return_value=False),
             patch.object(frappe.db, "commit") as commit,
         ):
@@ -1480,6 +1539,10 @@ class TestHDTicket(FrappeTestCase):
         ]
         self.assertEqual(len(queued), 1)
         self.assertEqual(queued[0].status, "Not Sent")
+        self.assertEqual(
+            message_from_string(queued[0].message)["Reply-To"],
+            f"support+{ticket.name}@example.com",
+        )
 
     def test_portal_reply_saves_the_stored_ticket_not_the_callers_copy(self):
         """run_doc_method builds the document from the request; the reply must not save it."""

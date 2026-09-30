@@ -597,17 +597,19 @@ class HDTicket(Document):
         sender_email = frappe._dict(name=email_account_name, email_id=from_email_id)
         return sender_email, email_account_name
 
-    def _reply_to_address(self, default: str) -> str:
-        """Reply-To address for an agent reply on this ticket.
+    def _reply_to_address(self, default: str | None = None) -> str | None:
+        """Reply-To address for mail to the requester about this ticket: agent
+        replies and the acknowledgement email.
 
         Renders HD Settings' `reply_to_template` with `doc` as this ticket, so each
         ticket can get its own reply address, for example a plus address:
 
             support+{{ doc.name }}@example.com
 
-        Returns `default` (the email account's address) when the template is empty,
-        fails to render, or does not produce a valid email address. A reply is never
-        blocked by the template.
+        Returns `default` when the template is empty, fails to render, or does not
+        produce a valid email address. Agent replies pass the email account's
+        address; the acknowledgement passes None, so Frappe's own default applies.
+        An email is never blocked by the template.
         """
         template = frappe.db.get_single_value("HD Settings", "reply_to_template")
         if not (template or "").strip():
@@ -1003,6 +1005,7 @@ class HDTicket(Document):
                 ),
                 reference_doctype="HD Ticket",
                 reference_name=self.name,
+                reply_to=self._reply_to_address(None),
                 expose_recipients="header",
                 email_headers={"X-Auto-Generated": "hd-acknowledgement"},
             )
