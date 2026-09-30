@@ -7,19 +7,32 @@
     </div>
     <header id="app-header" class="w-full"></header>
   </div>
-  <CallUI class="me-3 mt-2" :userEmail="user" />
+  <CallUI v-if="callingWasEnabled" class="me-3 mt-2" :userEmail="user" />
 </template>
 
 <script setup>
 import { mobileSidebarOpened as sidebarOpened } from "@/composables/mobile";
-import CallUI from "../telephony/CallUI.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useTelephonyStore } from "@/stores/telephony";
-import { onMounted } from "vue";
+import { defineAsyncComponent, onMounted, ref, watch } from "vue";
+
+const CallUI = defineAsyncComponent(() => import("../telephony/CallUI.vue"));
 
 const { user } = useAuthStore();
 
 const telephonyStore = useTelephonyStore();
+
+// The call UI pulls in the telephony SDKs, so it loads only once calling is
+// enabled, and stays mounted if a refetch turns it off, so a call in
+// progress isn't cut off.
+const callingWasEnabled = ref(false);
+watch(
+  () => telephonyStore.isCallingEnabled,
+  (enabled) => {
+    if (enabled) callingWasEnabled.value = true;
+  },
+  { immediate: true }
+);
 
 onMounted(() => {
   telephonyStore.fetchCallIntegrationStatus();
