@@ -2,6 +2,7 @@
 # See license.txt
 
 import hashlib
+from contextlib import contextmanager
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -120,6 +121,48 @@ def send_reply_with_template(ticket, template: str | None):
 
     assert sendmail.called, "reply should have been emailed"
     return sendmail.call_args.kwargs
+
+
+ACK_HEADER = "hd-acknowledgement"
+ACK_FAILED = "Acknowledgement email could not be queued"
+
+
+def is_acknowledgement(kwargs: dict) -> bool:
+    return (kwargs.get("email_headers") or {}).get("X-Auto-Generated") == ACK_HEADER
+
+
+def acknowledgements(sendmail) -> list[dict]:
+    """The kwargs of each acknowledgement a patched frappe.sendmail was called with."""
+    return [c.kwargs for c in sendmail.call_args_list if is_acknowledgement(c.kwargs)]
+
+
+def new_error_logs(before: set[str]) -> list[dict]:
+    """Error Logs added since `before`, a set of Error Log names. Error Log is a
+    MyISAM table, so its rows outlive the test's rollback while ticket names are
+    rolled back and reused: a count of logs against a ticket name can include
+    logs from earlier runs."""
+    return [
+        log
+        for log in frappe.get_all(
+            "Error Log",
+            fields=["name", "method", "reference_doctype", "reference_name"],
+        )
+        if log.name not in before
+    ]
+
+
+@contextmanager
+def acknowledgement_on():
+    """Turn on HD Settings' acknowledgement email, and restore the settings after."""
+    previous = frappe.db.get_value(
+        "HD Settings", "HD Settings", ["send_acknowledgement_email"], as_dict=True
+    )
+    frappe.db.set_single_value("HD Settings", "send_acknowledgement_email", 1)
+    try:
+        yield
+    finally:
+        # rollback is per test class, so restore or later tests inherit this
+        frappe.db.set_single_value("HD Settings", previous)
 
 
 non_agent = "non_agent@test.com"
@@ -1365,6 +1408,78 @@ class TestHDTicket(FrappeTestCase):
         self.assertEqual(
             sent["reply_to"], f"support+r1-{ticket.name}-{mac}@example.com"
         )
+
+    def test_acknowledgement_failure_does_not_block_the_ticket(self):
+        """A mail error is logged against the ticket, and the ticket is still created."""
+
+        def sendmail(**kwargs):
+            if is_acknowledgement(kwargs):
+                raise Exception("mail server refused the message")
+
+        before = set(frappe.get_all("Error Log", pluck="name"))
+        with acknowledgement_on(), patch("frappe.sendmail", side_effect=sendmail):
+            ticket = make_ticket()
+
+        self.assertTrue(frappe.db.exists("HD Ticket", ticket.name))
+        self.assertEqual(
+            [
+                (log.method, log.reference_doctype, log.reference_name)
+                for log in new_error_logs(before)
+            ],
+            [(ACK_FAILED, "HD Ticket", ticket.name)],
+        )
+
+    def test_no_acknowledgement_for_a_ticket_created_in_the_portal(self):
+        with acknowledgement_on(), patch("frappe.sendmail") as sendmail:
+            make_ticket(via_customer_portal=1)
+        self.assertEqual(acknowledgements(sendmail), [])
+
+    def test_no_acknowledgement_for_a_split_ticket(self):
+        """A split is not a newly received request."""
+        with acknowledgement_on(), patch("frappe.sendmail") as sendmail:
+            ticket = make_ticket(description="Test Desc for split")
+            communication = frappe.get_all(
+                "Communication",
+                filters={
+                    "reference_doctype": "HD Ticket",
+                    "reference_name": ticket.name,
+                },
+                pluck="name",
+            )[0]
+            split = split_ticket(subject="Split Ticket", communication_id=communication)
+
+        self.assertTrue(frappe.db.get_value("HD Ticket", split, "ticket_split_from"))
+        self.assertEqual(
+            [ack["reference_name"] for ack in acknowledgements(sendmail)],
+            [ticket.name],
+            "only the original ticket is acknowledged",
+        )
+
+    def test_acknowledgement_is_queued_with_the_ticket(self):
+        """The acknowledgement goes through the email queue and never commits the
+        ticket's transaction half way through its creation."""
+        with (
+            acknowledgement_on(),
+            patch("frappe.are_emails_muted", return_value=False),
+            patch.object(frappe.db, "commit") as commit,
+        ):
+            ticket = make_ticket()
+
+        commit.assert_not_called()
+        queued = [
+            row
+            for row in frappe.get_all(
+                "Email Queue",
+                filters={
+                    "reference_doctype": "HD Ticket",
+                    "reference_name": ticket.name,
+                },
+                fields=["status", "message"],
+            )
+            if ACK_HEADER in (row.message or "")
+        ]
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].status, "Not Sent")
 
     def test_portal_reply_saves_the_stored_ticket_not_the_callers_copy(self):
         """run_doc_method builds the document from the request; the reply must not save it."""

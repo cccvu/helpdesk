@@ -188,8 +188,11 @@ class HDTicket(Document):
         send_ack_email = frappe.db.get_single_value(
             "HD Settings", "send_acknowledgement_email"
         )
+        # A split ticket is not a newly received request, so it gets no
+        # acknowledgement.
         if (
             not self.via_customer_portal
+            and not self.ticket_split_from
             and not frappe.flags.initial_sync
             and send_ack_email
         ):
@@ -985,6 +988,11 @@ class HDTicket(Document):
             "acknowledgement"
         )
 
+        # An acknowledgement is best-effort: it must never fail the ticket it
+        # acknowledges. It is queued, so it commits with the ticket and the
+        # email queue sends and retries it. Sending it now would commit the
+        # ticket before its after_insert and on_update finish, and a mail
+        # server error would then fail the request for a ticket that exists.
         try:
             frappe.sendmail(
                 recipients=[self.raised_by],
@@ -995,13 +1003,17 @@ class HDTicket(Document):
                 ),
                 reference_doctype="HD Ticket",
                 reference_name=self.name,
-                now=True,
                 expose_recipients="header",
                 email_headers={"X-Auto-Generated": "hd-acknowledgement"},
             )
-        except Exception as e:
-            frappe.throw(
-                _("Could not send an acknowledgement email due to: {0}").format(e)
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            # the transaction is lost; let the caller retry the whole request
+            raise
+        except Exception:
+            frappe.log_error(
+                title=_("Acknowledgement email could not be queued"),
+                reference_doctype="HD Ticket",
+                reference_name=self.name,
             )
 
     @frappe.whitelist()
