@@ -29,7 +29,10 @@ class HDTeam(Document):
             return
         ar = frappe.get_doc("Assignment Rule", self.assignment_rule)
         self.sync_users(ar)
-        ar.disabled = bool(self.disabled)
+        # Follow the team only when it is enabled or disabled, so a member
+        # change doesn't re-enable a rule an admin turned off.
+        if self.has_value_changed("disabled"):
+            ar.disabled = bool(self.disabled)
         ar.save(ignore_permissions=True)
 
     def on_trash(self):

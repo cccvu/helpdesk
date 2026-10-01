@@ -129,3 +129,16 @@ class TestHDTeam(FrappeTestCase):
         team2 = make_team("Test AR Enable Disable 2", disabled=True)
         ar2 = frappe.get_doc("Assignment Rule", team2.assignment_rule)
         self.assertTrue(ar2.disabled)
+
+    def test_member_change_keeps_rule_disabled(self):
+        team = make_team("Test AR Keep Disabled")
+        frappe.db.set_value("Assignment Rule", team.assignment_rule, "disabled", 1)
+
+        agent = make_agent("keep_disabled_agent@example.com")
+        team.reload()
+        team.append("users", {"user": agent})
+        team.save(ignore_permissions=True)
+
+        ar = frappe.get_doc("Assignment Rule", team.assignment_rule)
+        self.assertTrue(ar.disabled)
+        self.assertIn(agent, [u.user for u in ar.users])
