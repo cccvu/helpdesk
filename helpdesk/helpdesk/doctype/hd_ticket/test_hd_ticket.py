@@ -955,6 +955,22 @@ class TestHDTicket(FrappeTestCase):
         parsed = ticket.parse_content(f'<p>embed="{url}"</p><img src="{own.file_url}">')
         self.assertEqual(EMBED_PATTERN.findall(parsed), [own.file_url])
 
+    def test_parse_content_does_not_unescape_an_approved_name_twice(self):
+        """An approved file name that looks like an entity keeps only itself,
+        not the file its decoded form names."""
+        foreign = make_private_file(non_agent, file_name="lowbar_b.png")
+        own_name = foreign.file_url.rsplit("/", 1)[1].replace("_", "&lowbar;")
+        own = make_private_file(agent, file_name=own_name)
+        self.assertEqual(unescape(own.file_url), foreign.file_url)
+        ticket = make_ticket()
+        frappe.set_user(agent)
+
+        parsed = ticket.parse_content(
+            f'<p>embed="{foreign.file_url}"</p><img src="{escape(own.file_url)}">'
+        )
+        embeds = [unescape(path) for path in EMBED_PATTERN.findall(parsed)]
+        self.assertEqual(embeds, [own.file_url])
+
     def test_portal_reply_mail_keeps_the_agents_inline_image(self):
         """The embed parse_content approved survives the portal reply template,
         including a file name that is escaped in HTML."""

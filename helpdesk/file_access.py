@@ -33,15 +33,15 @@ def disarm_embeds(html: str, keep: set[str] | frozenset[str] = frozenset()) -> s
     Frappe's mail builder reads every such path from disk into the mail,
     without a permission check, wherever the text appears in the HTML: on any
     tag, in an attribute value or as plain text (`EMBED_PATTERN` in
-    frappe.email.email_body). Paths are compared HTML-unescaped, as the mail
-    builder reads them. A zero-width space after "embed" stops the pattern
+    frappe.email.email_body). `keep` holds decoded paths; each matched path
+    is unescaped once, as the mail builder reads it, and never `keep` again:
+    a decoded name can itself look like an entity. A zero-width space after "embed" stops the pattern
     matching, and survives the HTML being parsed and written again. Every
     position a match can start at is checked, so overlapping matches can't
     hide one another.
     """
     if not html:
         return html
-    keep = {unescape(path) for path in keep}
     cuts = []
     pos = 0
     while match := EMBED_PATTERN.search(html, pos):

@@ -240,12 +240,19 @@ class TestFileAccess(FrappeTestCase):
         self.assertEqual(disarm_embeds(""), "")
 
     def test_disarm_embeds_compares_unescaped_paths(self):
-        """The mail builder unescapes the path it reads."""
+        """The mail builder unescapes the path it reads, once; `keep` holds
+        decoded paths and is never unescaped."""
         kept = "/private/files/Q&A.png"
         html = '<img embed="/private/files/Q&amp;A.png">'
         self.assertEqual(disarm_embeds(html, {kept}), html)
-        self.assertEqual(disarm_embeds(html, {"/private/files/Q&amp;A.png"}), html)
         self.assertIsNone(EMBED_PATTERN.search(disarm_embeds(html)))
+
+        # a decoded name that looks like an entity keeps only itself
+        kept = "/private/files/a&lowbar;b.png"
+        other = '<p>embed="/private/files/a_b.png"</p>'
+        self.assertIsNone(EMBED_PATTERN.search(disarm_embeds(other, {kept})))
+        own = '<img embed="/private/files/a&amp;lowbar;b.png">'
+        self.assertEqual(disarm_embeds(own, {kept}), own)
 
     def test_disarm_embeds_matches_inserting_at_each_match(self):
         """Cutting once at the end gives what inserting at each match gave."""

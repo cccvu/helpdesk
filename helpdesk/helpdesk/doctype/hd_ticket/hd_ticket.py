@@ -1,6 +1,7 @@
 import json
 import uuid
 from email.utils import parseaddr
+from html import unescape
 
 import frappe
 from bs4 import BeautifulSoup, Comment
@@ -838,7 +839,7 @@ class HDTicket(Document):
                     default_email_content,
                     {"message": message, "ticket_url": self.portal_uri},
                     # parse_content left only the embeds it approved
-                    keep_embeds=set(EMBED_PATTERN.findall(message)),
+                    keep_embeds={unescape(p) for p in EMBED_PATTERN.findall(message)},
                 )
             except Exception as e:
                 frappe.throw(_("Could not an email due to: {0}").format(e))
