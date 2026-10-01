@@ -1,6 +1,7 @@
 import json
 import uuid
 from email.utils import parseaddr
+from html import unescape
 
 import frappe
 from bs4 import BeautifulSoup, Comment
@@ -9,7 +10,7 @@ from frappe.core.page.permission_manager.permission_manager import remove
 from frappe.desk.form.assign_to import add as assign
 from frappe.desk.form.assign_to import clear as clear_all_assignments
 from frappe.desk.form.assign_to import get as get_assignees
-from frappe.email.email_body import get_message_id
+from frappe.email.email_body import EMBED_PATTERN, get_message_id
 from frappe.model.document import Document
 from frappe.permissions import add_permission, update_permission_property
 from frappe.utils import (
@@ -24,6 +25,7 @@ from pypika.functions import Count
 from pypika.queries import Query
 from pypika.terms import Criterion
 
+from helpdesk.file_access import can_read_file_url, disarm_embeds
 from helpdesk.helpdesk.doctype.hd_settings.helpers import (
     get_default_email_content,
     is_email_content_empty,
@@ -109,8 +111,14 @@ class HDTicket(Document):
             )
 
     def _get_rendered_template(
-        self, content: str, default_content: str, args: dict[str, str] | None = None
+        self,
+        content: str,
+        default_content: str,
+        args: dict[str, str] | None = None,
+        keep_embeds: set[str] | frozenset[str] = frozenset(),
     ):
+        """Render an email template. Embeds other than `keep_embeds` are
+        disarmed, since ticket fields and messages in it come from callers."""
         if args is None:
             args = dict()
         template_args = {
@@ -118,9 +126,12 @@ class HDTicket(Document):
         }
         for key, value in args.items():
             template_args[key] = value
-        return frappe.render_template(
-            default_content if is_email_content_empty(content) else content,
-            template_args,
+        return disarm_embeds(
+            frappe.render_template(
+                default_content if is_email_content_empty(content) else content,
+                template_args,
+            ),
+            keep_embeds,
         )
 
     def handle_email_feedback(self):
@@ -827,6 +838,8 @@ class HDTicket(Document):
                     email_content,
                     default_email_content,
                     {"message": message, "ticket_url": self.portal_uri},
+                    # parse_content left only the embeds it approved
+                    keep_embeds={unescape(p) for p in EMBED_PATTERN.findall(message)},
                 )
             except Exception as e:
                 frappe.throw(_("Could not an email due to: {0}").format(e))
@@ -884,6 +897,10 @@ class HDTicket(Document):
     def _create_communication_via_contact(
         self, message: str, attachments: list[dict] = [], new_ticket: bool = False
     ):
+        _attachments = self.get("attachments") or attachments or []
+        names = [i.get("name") if isinstance(i, dict) else None for i in _attachments]
+        self.check_files_can_move_here(names)
+
         if not new_ticket and frappe.db.get_single_value(
             "HD Settings", "enable_reply_email_to_agent"
         ):
@@ -910,11 +927,10 @@ class HDTicket(Document):
         c.ignore_mandatory = True
         c.save(ignore_permissions=True)
 
-        _attachments = self.get("attachments") or attachments or []
-        if not len(_attachments):
+        if not names:
             return
         QBFile = frappe.qb.DocType("File")
-        condition_name = [QBFile.name == i["name"] for i in _attachments]
+        condition_name = [QBFile.name == name for name in names]
         frappe.qb.update(QBFile).set(QBFile.attached_to_name, c.name).set(
             QBFile.attached_to_doctype, "Communication"
         ).where(Criterion.any(condition_name)).run()
@@ -925,6 +941,32 @@ class HDTicket(Document):
         )
         for url in file_urls:
             self.attach_file_with_doc("HD Ticket", self.name, url)
+
+    def check_files_can_move_here(self, names: list[str]):
+        """Only the session user's own Files, unattached or attached to this
+        ticket, may be moved onto a message on it. The move is a direct database
+        update, so File permission checks don't run."""
+        for name in names:
+            # anything but a name (a dict would be read as filters) is refused
+            file = isinstance(name, str) and frappe.db.get_value(
+                "File",
+                name,
+                ["owner", "attached_to_doctype", "attached_to_name"],
+                as_dict=True,
+            )
+            if (
+                not file
+                or file.owner != frappe.session.user
+                or (
+                    file.attached_to_doctype
+                    and (file.attached_to_doctype, file.attached_to_name)
+                    != ("HD Ticket", self.name)
+                )
+            ):
+                frappe.throw(
+                    _("You do not have permission to attach this file"),
+                    frappe.PermissionError,
+                )
 
     def handle_inline_media_new_ticket(self):
         soup = BeautifulSoup(self.description, "html.parser")
@@ -1383,15 +1425,21 @@ class HDTicket(Document):
         for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
             comment.extract()
 
+        approved = set()
         for tag in soup.find_all(["img", "video"]):
             src = tag.get("src")
             # only site files can be embedded; external URLs must keep their src
             if not src or not src.startswith(("/private/files/", "/files/")):
                 continue
+            # the mail is built from the file on disk, without a permission check
+            if src.startswith("/private/") and not can_read_file_url(src):
+                continue
             tag["embed"] = src
             del tag["src"]
+            approved.add(src)
 
-        return str(soup)
+        # the mail builder reads any embed="..." in the text, not just these
+        return disarm_embeds(str(soup), approved)
 
     @staticmethod
     def filter_standard_fields(fields):

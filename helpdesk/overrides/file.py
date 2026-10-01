@@ -1,0 +1,233 @@
+import os
+import posixpath
+import re
+from urllib.parse import unquote
+
+import frappe
+from frappe import _
+from frappe.core.doctype.file.file import File
+from frappe.core.doctype.file.utils import get_file_name
+from frappe.utils import cint, get_files_path
+
+# tries at a file name no other File's URL matches case-insensitively
+MAX_RENAMES = 5
+
+
+class HelpdeskFile(File):
+    """File with access checks Frappe v15 doesn't make yet.
+
+    Each check is its own method, and its docstring names the upstream change
+    that makes it redundant, so it can be removed once that change is in the
+    Frappe version Helpdesk runs on.
+    """
+
+    def before_insert(self):
+        self.validate_canonical_file_url()
+        self.validate_has_source()
+        super().before_insert()
+
+    def validate(self):
+        # The parent's validate moves files on disk when is_private changes,
+        # so these run first.
+        if not self.is_new():
+            self.validate_fixed_fields()
+            self.validate_reattachment()
+            self.validate_unshared_privacy_change()
+            self.validate_privacy_change_keeps_url_unique()
+        super().validate()
+
+    def validate_canonical_file_url(self):
+        """Refuse a local file_url that isn't in canonical form.
+
+        A URL such as `/private/files/./x` or `/private/files//x` reads the
+        same file on disk as `/private/files/x` but doesn't match that File's
+        file_url, so a lookup of existing Files by URL misses it. Frappe's
+        `validate_file_path` only refuses `..` segments. Remove when Frappe
+        refuses or normalises non-canonical local file URLs.
+        """
+        if not self.file_url or self.file_url.startswith(("http://", "https://")):
+            return
+        url = unquote(self.file_url)
+        if (
+            url.startswith("//")
+            or posixpath.normpath(url) != url
+            or unquote(url) != url
+        ):
+            frappe.throw(_("The File URL you've entered is incorrect"))
+
+    def validate_has_source(self):
+        """Refuse a new File, other than a folder, with neither a file_url nor
+        content.
+
+        Frappe treats such a File as remote and skips its path and access
+        checks, but reads `<files>/<file_name>` from disk for it later. Remove
+        when Frappe refuses it (no upstream change yet).
+        """
+        if not self.is_folder and not self.file_url and not self.get("content"):
+            frappe.throw(
+                _("Fields `file_name` or `file_url` must be set for File"),
+                frappe.MandatoryError,
+            )
+
+    def validate_fixed_fields(self):
+        """Keep an existing File's file_url and owner as they are, and its
+        file_name too when it has no file_url.
+
+        Frappe doesn't enforce read-only fields on the server, and File
+        permissions follow the owner and the URL, so changing either could
+        grant access to another file. A File without a file_url is read from
+        disk by its file_name. The privacy toggle changes file_url itself,
+        after this check, inside the parent's validate. Remove when Frappe
+        refuses these changes on update (no upstream change yet).
+        """
+        if frappe.session.user == "Administrator":
+            return
+        before = self.get_doc_before_save()
+        if not before:
+            return
+        fixed = ["file_url", "owner"]
+        if not before.file_url and not before.is_folder:
+            fixed.append("file_name")
+        for fieldname in fixed:
+            if self.get(fieldname) != before.get(fieldname):
+                frappe.throw(
+                    _("{0} of a File can't be changed").format(
+                        self.meta.get_label(fieldname)
+                    ),
+                    frappe.PermissionError,
+                )
+
+    def validate_reattachment(self):
+        """Moving a File to another document needs write permission on the
+        File as stored and on the new document.
+
+        Frappe checks write on the File after the change is applied, so it
+        reflects the new document only. Upstream develop checks the new
+        document (frappe/frappe 6f23777977, v15 backport PR 43620); remove this
+        once Frappe also checks the stored File.
+        """
+        if (
+            self.flags.ignore_permissions
+            or frappe.flags.in_install
+            or frappe.flags.in_migrate
+        ):
+            return
+        if not (
+            self.has_value_changed("attached_to_doctype")
+            or self.has_value_changed("attached_to_name")
+        ):
+            return
+        before = self.get_doc_before_save()
+        if before:
+            before.check_permission("write")
+        if self.attached_to_doctype and self.attached_to_name:
+            frappe.get_doc(
+                self.attached_to_doctype, self.attached_to_name
+            ).check_permission("write")
+
+    def validate_unshared_privacy_change(self):
+        """Refuse a privacy change on a File whose stored file shares its URL
+        or content with another File.
+
+        Frappe v15 moves the file on disk and rewrites every File with the
+        same content hash, including other users'. Remove when Frappe copies
+        instead (frappe/frappe 8a0a5ae07f on develop).
+        """
+        if not self.has_value_changed("is_private"):
+            return
+        # the rewrite uses this document's content_hash, which the caller can set
+        before = self.get_doc_before_save() or self
+        if any(self._shares_with_another_file(doc) for doc in (self, before)):
+            frappe.throw(
+                _(
+                    "This file is shared with other records, so its privacy can't be changed"
+                )
+            )
+
+    def validate_privacy_change_keeps_url_unique(self):
+        """Refuse a privacy change that would give the file a URL another
+        File's URL matches, ignoring case.
+
+        The database compares file_url case-insensitively, as for new files
+        (save_file_on_filesystem); Frappe's toggle only checks that the exact
+        path is free on disk. Remove when Frappe compares file URLs exactly
+        (no upstream change yet).
+        """
+        if not self.has_value_changed("is_private"):
+            return
+        before = self.get_doc_before_save() or self
+        if self._url_in_use(self._toggled_url(before.file_url)):
+            frappe.throw(_("A file with the same name already exists"))
+
+    def _shares_with_another_file(self, doc) -> bool:
+        for fieldname in ("file_url", "content_hash"):
+            value = doc.get(fieldname)
+            if value and frappe.db.exists(
+                "File", {"name": ("!=", self.name), fieldname: value}
+            ):
+                return True
+        return False
+
+    def _toggled_url(self, file_url: str | None) -> str | None:
+        """The URL Frappe's privacy toggle gives a local file (see
+        File.handle_is_private_changed)."""
+        if not file_url or file_url.startswith(("http://", "https://")):
+            return None
+        prefix = "/private/files/" if cint(self.is_private) else "/files/"
+        return prefix + file_url.split("/")[-1]
+
+    def _url_in_use(self, file_url: str | None) -> bool:
+        """Whether another File's URL matches `file_url`; the database ignores
+        case."""
+        if not file_url:
+            return False
+        filters = {"file_url": file_url}
+        if self.name:  # a new File gets its name after before_insert
+            filters["name"] = ("!=", self.name)
+        return bool(frappe.db.exists("File", filters))
+
+    def save_file_on_filesystem(self):
+        """Give a new file a name whose URL no other File's URL matches, ignoring
+        case.
+
+        The database compares file_url case-insensitively, so Frappe's lookups
+        by URL (downloads, Attach fields) would also find the other File.
+        Frappe avoids only names that exist on disk, which is case-sensitive.
+        Remove when Frappe compares file URLs exactly (no upstream change yet).
+        """
+        if self.is_new():
+            for _attempt in range(MAX_RENAMES):
+                if not self._url_taken():
+                    break
+                self.file_name = get_file_name(self.file_name)
+            else:
+                frappe.throw(_("Could not find a free name for this file"))
+        return super().save_file_on_filesystem()
+
+    def _url_taken(self) -> bool:
+        """Whether the URL the parent would give this file matches another
+        File's URL, ignoring case, or its path exists on disk."""
+        safe_file_name = re.sub(r"[/\\%?#]", "_", self.file_name)
+        prefix = "/private/files/" if self.is_private else "/files/"
+        return bool(
+            self._url_in_use(prefix + safe_file_name)
+            or os.path.exists(
+                get_files_path(safe_file_name, is_private=self.is_private)
+            )
+        )
+
+    @frappe.whitelist()
+    def optimize_file(self):
+        """Optimize the File as stored, after checking write permission on it.
+
+        The method can be called on a document built from the request, whose
+        fields the caller chose. Frappe v15.121.2 checks only that its
+        file_url matches the stored one; remove when Frappe works on the
+        stored record.
+        """
+        if not self.name or not frappe.db.exists("File", self.name):
+            frappe.throw(_("Not permitted"), frappe.PermissionError)
+        stored = frappe.get_doc("File", self.name)
+        stored.check_permission("write")
+        File.optimize_file(stored)
+        self.reload()

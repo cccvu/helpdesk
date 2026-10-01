@@ -656,3 +656,28 @@ def upload_test_file(file_name: str) -> str:
         }
     ).insert(ignore_permissions=True)
     return file_doc.name
+
+
+def make_private_file(
+    owner: str, content: bytes | None = None, file_name: str = "note.txt", **fields
+):
+    """Insert a private File as `owner` and return it.
+
+    The content is random unless given, so Frappe's content-hash dedupe doesn't
+    point the new File at another test's file. Extra keyword arguments are set
+    on the File (attached_to_doctype, attached_to_name, ...).
+    """
+    previous = frappe.session.user
+    frappe.set_user(owner)
+    try:
+        return frappe.get_doc(
+            {
+                "doctype": "File",
+                "file_name": file_name,
+                "is_private": 1,
+                "content": content or frappe.generate_hash().encode(),
+                **fields,
+            }
+        ).insert(ignore_permissions=True)
+    finally:
+        frappe.set_user(previous)

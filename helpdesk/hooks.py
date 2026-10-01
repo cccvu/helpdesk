@@ -74,6 +74,9 @@ user_invitation = {
 }
 
 doc_events = {
+    "*": {
+        "validate": "helpdesk.extends.attach_field.validate_private_attachments",
+    },
     "Assignment Rule": {
         "on_trash": "helpdesk.extends.assignment_rule.on_assignment_rule_trash",
         "validate": "helpdesk.extends.assignment_rule.on_assignment_rule_validate",
@@ -130,6 +133,7 @@ override_doctype_class = {
     "Email Account": "helpdesk.overrides.email_account.CustomEmailAccount",
     "Assignment Rule": "helpdesk.overrides.assignment_rule.HelpdeskAssignmentRule",
     "User Invitation": "helpdesk.overrides.user_invitation.HelpdeskUserInvitation",
+    "File": "helpdesk.overrides.file.HelpdeskFile",
 }
 
 ignore_links_on_delete = [
