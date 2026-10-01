@@ -233,6 +233,28 @@ class TestFileAccess(FrappeTestCase):
         self.assertIsNone(EMBED_PATTERN.search(disarm_embeds(html)))
         self.assertEqual(disarm_embeds(""), "")
 
+    def test_privacy_toggle_cannot_make_a_case_variant_url(self):
+        """Frappe's toggle only checks that the exact path is free on disk."""
+        name = f"probe{frappe.generate_hash(length=6)}"
+        victim = make_private_file(OWNER, file_name=f"{name}.txt")
+        public = make_private_file(OTHER, file_name=f"{name}.txt".upper(), is_private=0)
+        # a public URL doesn't clash with the private one, so no rename
+        self.assertEqual(public.file_url, "/files/" + f"{name}.txt".upper())
+        frappe.set_user(OTHER)
+
+        doc = frappe.get_doc("File", public.name)
+        doc.is_private = 1
+        with self.assertRaises(frappe.ValidationError):
+            doc.save()
+
+        frappe.set_user("Administrator")
+        self.assertEqual(
+            frappe.db.get_value("File", public.name, "file_url"), public.file_url
+        )
+        self.assertEqual(
+            frappe.db.get_value("File", victim.name, "file_url"), victim.file_url
+        )
+
     def test_mention_mail_embeds_nothing(self):
         notification = frappe.get_doc(
             {

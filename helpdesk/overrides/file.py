@@ -7,7 +7,7 @@ import frappe
 from frappe import _
 from frappe.core.doctype.file.file import File
 from frappe.core.doctype.file.utils import get_file_name
-from frappe.utils import get_files_path
+from frappe.utils import cint, get_files_path
 
 # tries at a file name no other File's URL matches case-insensitively
 MAX_RENAMES = 5
@@ -131,12 +131,18 @@ class HelpdeskFile(File):
         Frappe v15 moves the file on disk and rewrites every File with the
         same content hash, including other users'. Remove when Frappe copies
         instead (frappe/frappe 8a0a5ae07f on develop).
+
+        Also refused when the URL the file would move to matches another
+        File's URL ignoring case, as for new files (save_file_on_filesystem):
+        Frappe only checks that the exact path is free on disk.
         """
         if not self.has_value_changed("is_private"):
             return
         # the rewrite uses this document's content_hash, which the caller can set
-        docs = [self, self.get_doc_before_save() or self]
-        if any(self._shares_with_another_file(doc) for doc in docs):
+        before = self.get_doc_before_save() or self
+        if any(
+            self._shares_with_another_file(doc) for doc in (self, before)
+        ) or self._url_in_use(self._toggled_url(before.file_url)):
             frappe.throw(
                 _(
                     "This file is shared with other records, so its privacy can't be changed"
@@ -151,6 +157,24 @@ class HelpdeskFile(File):
             ):
                 return True
         return False
+
+    def _toggled_url(self, file_url: str | None) -> str | None:
+        """The URL Frappe's privacy toggle gives a local file (see
+        File.handle_is_private_changed)."""
+        if not file_url or file_url.startswith(("http://", "https://")):
+            return None
+        prefix = "/private/files/" if cint(self.is_private) else "/files/"
+        return prefix + file_url.split("/")[-1]
+
+    def _url_in_use(self, file_url: str | None) -> bool:
+        """Whether another File's URL matches `file_url`; the database ignores
+        case."""
+        if not file_url:
+            return False
+        filters = {"file_url": file_url}
+        if self.name:  # a new File gets its name after before_insert
+            filters["name"] = ("!=", self.name)
+        return bool(frappe.db.exists("File", filters))
 
     def save_file_on_filesystem(self):
         """Give a new file a name whose URL no other File's URL matches, ignoring
@@ -176,7 +200,7 @@ class HelpdeskFile(File):
         safe_file_name = re.sub(r"[/\\%?#]", "_", self.file_name)
         prefix = "/private/files/" if self.is_private else "/files/"
         return bool(
-            frappe.db.exists("File", {"file_url": prefix + safe_file_name})
+            self._url_in_use(prefix + safe_file_name)
             or os.path.exists(
                 get_files_path(safe_file_name, is_private=self.is_private)
             )
