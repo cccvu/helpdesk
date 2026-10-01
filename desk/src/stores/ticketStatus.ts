@@ -58,13 +58,26 @@ export const useTicketStatusStore = defineStore("ticketStatus", () => {
     getStatus,
   };
 });
+// Spelt out so Tailwind's scanner sees every class. Keys mirror the
+// HD Ticket Status "color" Select; lookups ignore case, because HD Agent
+// Status colors (also passed here) include lowercase options.
+const dotColorMap: Record<string, string> = {
+  Black: "!text-ink-gray-9",
+  Gray: "!text-gray-500",
+  Blue: "!text-blue-500",
+  Green: "!text-green-500",
+  Red: "!text-red-500",
+  Pink: "!text-pink-500",
+  Orange: "!text-orange-500",
+  Amber: "!text-amber-500",
+  Yellow: "!text-yellow-500",
+  Cyan: "!text-cyan-500",
+  Teal: "!text-teal-500",
+  Violet: "!text-violet-500",
+  Purple: "!text-purple-500",
+};
+
 export function parseColor(color: string): string {
-  color = color.toLowerCase();
-  let textColor = `!text-${color}-500`;
-  if (color == "black") {
-    textColor = "!text-ink-gray-9";
-  } else if (["gray", "green"].includes(color)) {
-    textColor = `!text-${color}-500`;
-  }
-  return textColor;
+  const key = color.charAt(0).toUpperCase() + color.slice(1).toLowerCase();
+  return dotColorMap[key] ?? dotColorMap.Gray;
 }

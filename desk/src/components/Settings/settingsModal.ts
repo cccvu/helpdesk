@@ -1,11 +1,4 @@
-import { computed, h, markRaw, ref } from "vue";
-import Agents from "./Agents.vue";
-import EmailConfig from "./EmailConfig.vue";
-import TeamsConfig from "./Teams/TeamsConfig.vue";
-import Sla from "./Sla/Sla.vue";
-import HolidayList from "./Holiday/Holiday.vue";
-import FieldDependencyConfig from "./FieldDependency/FieldDependencyConfig.vue";
-import InviteAgents from "./InviteAgents.vue";
+import { computed, defineAsyncComponent, h, markRaw, ref } from "vue";
 import LucideMail from "~icons/lucide/mail";
 import LucideMailOpen from "~icons/lucide/mail-open";
 import LucideUser from "~icons/lucide/user";
@@ -13,26 +6,55 @@ import LucideUserPlus from "~icons/lucide/user-plus";
 import LucideUsers from "~icons/lucide/users";
 import ShieldCheck from "~icons/lucide/shield-check";
 import Briefcase from "~icons/lucide/briefcase";
-import AssignmentRules from "./Assignment Rules/AssignmentRules.vue";
 import Settings from "~icons/lucide/settings-2";
 import {
   ERPNextSettingsIcon,
   FieldDependencyIcon,
   PhoneIcon,
 } from "@/components/icons";
-import ERPNextIntegrationSettings from "@/components/erpnext-integration/ERPNextIntegrationSettings.vue";
 import { FieldDependencyIcon, PhoneIcon, SlidersIcon } from "@/components/icons";
-import TelephonyPage from "./Telephony/TelephonyPage.vue";
-import { EmailNotifications } from "./EmailNotifications";
 import { __ } from "@/translation";
-import SavedReplies from "./SavedReplies/SavedReplies.vue";
 import { Avatar } from "frappe-ui";
 import { useAuthStore } from "@/stores/auth";
-import General from "./General/General.vue";
 import SettingsGear from "~icons/lucide/settings";
 import ZapIcon from "~icons/lucide/zap";
-import ProfilePage from "./Profile/ProfilePage.vue";
-import Preferences from "./Preferences/Preferences.vue";
+
+// Each page loads when its tab is first opened; labels and icons stay eager
+// for the sidebar and the command palette.
+const Agents = defineAsyncComponent(() => import("./Agents.vue"));
+const EmailConfig = defineAsyncComponent(() => import("./EmailConfig.vue"));
+const TeamsConfig = defineAsyncComponent(
+  () => import("./Teams/TeamsConfig.vue")
+);
+const Sla = defineAsyncComponent(() => import("./Sla/Sla.vue"));
+const HolidayList = defineAsyncComponent(() => import("./Holiday/Holiday.vue"));
+const FieldDependencyConfig = defineAsyncComponent(
+  () => import("./FieldDependency/FieldDependencyConfig.vue")
+);
+const InviteAgents = defineAsyncComponent(() => import("./InviteAgents.vue"));
+const AssignmentRules = defineAsyncComponent(
+  () => import("./Assignment Rules/AssignmentRules.vue")
+);
+const ERPNextIntegrationSettings = defineAsyncComponent(
+  () =>
+    import("@/components/erpnext-integration/ERPNextIntegrationSettings.vue")
+);
+const TelephonyPage = defineAsyncComponent(
+  () => import("./Telephony/TelephonyPage.vue")
+);
+const EmailNotifications = defineAsyncComponent(
+  () => import("./EmailNotifications/EmailNotifications.vue")
+);
+const SavedReplies = defineAsyncComponent(
+  () => import("./SavedReplies/SavedReplies.vue")
+);
+const General = defineAsyncComponent(() => import("./General/General.vue"));
+const ProfilePage = defineAsyncComponent(
+  () => import("./Profile/ProfilePage.vue")
+);
+const Preferences = defineAsyncComponent(
+  () => import("./Preferences/Preferences.vue")
+);
 
 export const showSettingsModal = ref(false);
 
