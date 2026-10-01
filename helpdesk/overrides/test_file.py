@@ -1,4 +1,7 @@
+import ast
+import os
 import time
+import unittest
 from html import unescape
 
 import frappe
@@ -306,3 +309,46 @@ class TestFileAccess(FrappeTestCase):
         )
         self.assertIsNone(EMBED_PATTERN.search(notification.parse_html()))
 
+
+# Each non-test frappe.sendmail call in the app, as (path in the app, function).
+SENDMAIL_SITES = {
+    ("helpdesk/doctype/hd_notification/hd_notification.py", "after_insert"),
+    ("helpdesk/doctype/hd_ticket/hd_ticket.py", "handle_email_feedback"),
+    ("helpdesk/doctype/hd_ticket/hd_ticket.py", "reply_via_agent"),
+    ("helpdesk/doctype/hd_ticket/hd_ticket.py", "send_acknowledgement_email"),
+    ("helpdesk/doctype/hd_ticket/hd_ticket.py", "send_reply_email_to_agent"),
+}
+
+
+def find_sendmail_sites() -> set[tuple[str, str]]:
+    """(path in the app, enclosing function) of each `sendmail(...)` call
+    outside tests."""
+    root = frappe.get_app_path("helpdesk")
+    sites = set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in ("public", "__pycache__")]
+        for filename in filenames:
+            if not filename.endswith(".py") or filename.startswith("test_"):
+                continue
+            path = os.path.join(dirpath, filename)
+            with open(path) as f:
+                tree = ast.parse(f.read())
+            for function in ast.walk(tree):
+                if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for node in ast.walk(function):
+                    callee = getattr(node, "func", None)
+                    name = getattr(callee, "attr", None) or getattr(callee, "id", None)
+                    if isinstance(node, ast.Call) and name == "sendmail":
+                        sites.add((os.path.relpath(path, root), function.name))
+    return sites
+
+
+class TestMailSites(unittest.TestCase):
+    def test_every_mail_path_disarms_embeds(self):
+        self.assertEqual(
+            find_sendmail_sites(),
+            SENDMAIL_SITES,
+            "A mail path was added or moved: route the new mail path through "
+            "disarm_embeds (G8), then update SENDMAIL_SITES.",
+        )
