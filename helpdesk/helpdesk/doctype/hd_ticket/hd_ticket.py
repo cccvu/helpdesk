@@ -24,6 +24,7 @@ from pypika.functions import Count
 from pypika.queries import Query
 from pypika.terms import Criterion
 
+from helpdesk.file_access import can_read_file_url
 from helpdesk.helpdesk.doctype.hd_settings.helpers import (
     get_default_email_content,
     is_email_content_empty,
@@ -884,6 +885,9 @@ class HDTicket(Document):
     def _create_communication_via_contact(
         self, message: str, attachments: list[dict] = [], new_ticket: bool = False
     ):
+        _attachments = self.get("attachments") or attachments or []
+        self.check_files_can_move_here([i["name"] for i in _attachments])
+
         if not new_ticket and frappe.db.get_single_value(
             "HD Settings", "enable_reply_email_to_agent"
         ):
@@ -910,7 +914,6 @@ class HDTicket(Document):
         c.ignore_mandatory = True
         c.save(ignore_permissions=True)
 
-        _attachments = self.get("attachments") or attachments or []
         if not len(_attachments):
             return
         QBFile = frappe.qb.DocType("File")
@@ -925,6 +928,32 @@ class HDTicket(Document):
         )
         for url in file_urls:
             self.attach_file_with_doc("HD Ticket", self.name, url)
+
+    def check_files_can_move_here(self, names: list[str]):
+        """Only the session user's own Files, unattached or attached to this
+        ticket, may be moved onto a message on it. The move is a direct database
+        update, so File permission checks don't run."""
+        for name in names:
+            # a dict would be read as filters
+            file = isinstance(name, str) and frappe.db.get_value(
+                "File",
+                name,
+                ["owner", "attached_to_doctype", "attached_to_name"],
+                as_dict=True,
+            )
+            if (
+                not file
+                or file.owner != frappe.session.user
+                or (
+                    file.attached_to_doctype
+                    and (file.attached_to_doctype, file.attached_to_name)
+                    != ("HD Ticket", self.name)
+                )
+            ):
+                frappe.throw(
+                    _("You do not have permission to attach this file"),
+                    frappe.PermissionError,
+                )
 
     def handle_inline_media_new_ticket(self):
         soup = BeautifulSoup(self.description, "html.parser")
@@ -1387,6 +1416,9 @@ class HDTicket(Document):
             src = tag.get("src")
             # only site files can be embedded; external URLs must keep their src
             if not src or not src.startswith(("/private/files/", "/files/")):
+                continue
+            # the mail is built from the file on disk, without a permission check
+            if src.startswith("/private/") and not can_read_file_url(src):
                 continue
             tag["embed"] = src
             del tag["src"]

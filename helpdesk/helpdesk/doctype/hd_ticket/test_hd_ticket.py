@@ -35,7 +35,9 @@ from helpdesk.test_utils import (
     get_current_week_monday,
     get_latest_ticket_communication,
     get_priority_response_resolution_time,
+    make_agent,
     make_priority,
+    make_private_file,
     make_sla,
     make_status,
     make_team,
@@ -897,9 +899,11 @@ class TestHDTicket(FrappeTestCase):
         as cid attachments), while external and data URIs keep their src.
         """
         ticket = make_ticket()
+        shot = make_private_file(agent, file_name="shot.png")
+        frappe.set_user(agent)
 
-        parsed = ticket.parse_content('<img src="/private/files/shot.png">')
-        self.assertIn('embed="/private/files/shot.png"', parsed)
+        parsed = ticket.parse_content(f'<img src="{shot.file_url}">')
+        self.assertIn(f'embed="{shot.file_url}"', parsed)
         self.assertNotIn("src=", parsed)
 
         parsed = ticket.parse_content('<img src="/files/public.png">')
@@ -913,6 +917,18 @@ class TestHDTicket(FrappeTestCase):
         self.assertEqual(ticket.parse_content(data_uri), data_uri)
 
         self.assertEqual(ticket.parse_content(""), "")
+
+    def test_parse_content_embeds_only_private_files_the_sender_can_read(self):
+        """The mail is built from the file on disk without a permission check,
+        so a private image the sender can't read keeps its src."""
+        ticket = make_ticket()
+        foreign = make_private_file(non_agent, file_name="foreign.png")
+        frappe.set_user(agent)
+
+        for src in (foreign.file_url, "/private/files/missing.png"):
+            with self.subTest(src):
+                content = f'<img src="{src}"/>'
+                self.assertEqual(ticket.parse_content(content), content)
 
     def test_ticket_inside_working_hours(self):
         inside_working_hour = get_current_week_monday(hours=14)
@@ -2690,6 +2706,155 @@ class TestHDTicket(FrappeTestCase):
         remove_holidays()
         frappe.db.set_single_value("HD Settings", "default_ticket_status", "Open")
         frappe.delete_doc("HD Ticket Status", "New", force=True)
+
+
+def attached_to(file_name: str) -> tuple:
+    """The (doctype, name) a File is attached to, as stored."""
+    return tuple(
+        frappe.db.get_value(
+            "File", file_name, ["attached_to_doctype", "attached_to_name"]
+        )
+    )
+
+
+class TestTicketFileAccess(FrappeTestCase):
+    """Ticket flows that take a File name or URL from the caller."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        make_agent(agent, first_name="Agent")
+        cls.customer = create_contact("Test C1", CONTACTS[0]).get("user")
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def has_copy(self, file_url: str, doctype: str, name: str) -> bool:
+        return bool(
+            frappe.db.exists(
+                "File",
+                {
+                    "file_url": file_url,
+                    "attached_to_doctype": doctype,
+                    "attached_to_name": name,
+                },
+            )
+        )
+
+    def test_portal_reply_moves_own_upload(self):
+        frappe.set_user(self.customer)
+        ticket = make_ticket()
+        upload = make_private_file(self.customer)
+
+        ticket.create_communication_via_contact(
+            message="With a file", attachments=[{"name": upload.name}]
+        )
+
+        reply = get_latest_ticket_communication(ticket.name)
+        self.assertEqual(attached_to(upload.name), ("Communication", reply.name))
+        self.assertTrue(self.has_copy(upload.file_url, "HD Ticket", ticket.name))
+
+    def test_portal_reply_refuses_files_it_cannot_move(self):
+        """Only the caller's own Files, unattached or on this ticket, can move."""
+        frappe.set_user(self.customer)
+        ticket = make_ticket()
+        other_ticket = make_ticket()
+        foreign = make_private_file(agent)
+        elsewhere = make_private_file(
+            self.customer,
+            attached_to_doctype="HD Ticket",
+            attached_to_name=other_ticket.name,
+        )
+        replies = frappe.db.count(
+            "Communication",
+            {"reference_doctype": "HD Ticket", "reference_name": ticket.name},
+        )
+
+        for file in (foreign, elsewhere):
+            with self.subTest(file.owner):
+                before = attached_to(file.name)
+                with self.assertRaises(frappe.PermissionError):
+                    ticket.create_communication_via_contact(
+                        message="Not mine", attachments=[{"name": file.name}]
+                    )
+                self.assertEqual(attached_to(file.name), before)
+
+        self.assertEqual(
+            frappe.db.count(
+                "Communication",
+                {"reference_doctype": "HD Ticket", "reference_name": ticket.name},
+            ),
+            replies,
+            "nothing is written before the check",
+        )
+
+    def test_new_ticket_moves_own_uploads(self):
+        frappe.set_user(self.customer)
+        upload = make_private_file(self.customer)
+        inline = make_private_file(self.customer, file_name="inline.png")
+
+        ticket = new(
+            {
+                "subject": "With files",
+                "description": f'<p>See</p><img src="{inline.file_url}">',
+            },
+            attachments=[{"name": upload.name}],
+        )
+
+        message = get_latest_ticket_communication(ticket.name)
+        self.assertEqual(attached_to(upload.name), ("Communication", message.name))
+        self.assertTrue(self.has_copy(upload.file_url, "HD Ticket", ticket.name))
+        self.assertEqual(attached_to(inline.name), ("HD Ticket", ticket.name))
+
+    def test_new_ticket_refuses_someone_elses_upload(self):
+        foreign = make_private_file(agent)
+        frappe.set_user(self.customer)
+        with self.assertRaises(frappe.PermissionError):
+            new(
+                {"subject": "Not mine", "description": "x"},
+                attachments=[{"name": foreign.name}],
+            )
+        self.assertEqual(attached_to(foreign.name), (None, None))
+
+    def test_agent_reply_and_comment_attach_own_uploads(self):
+        ticket = make_ticket()
+        frappe.set_user(agent)
+        # the reply and comment editors upload against the ticket
+        on_ticket = {
+            "attached_to_doctype": "HD Ticket",
+            "attached_to_name": ticket.name,
+        }
+        for_reply = make_private_file(agent, **on_ticket)
+        for_comment = make_private_file(agent, **on_ticket)
+
+        ticket.reply_via_agent(message="See attached", attachments=[for_reply.name])
+        reply = get_latest_ticket_communication(ticket.name)
+        self.assertTrue(self.has_copy(for_reply.file_url, "Communication", reply.name))
+
+        ticket.new_comment(
+            content="Internal", attachments=[{"file_url": for_comment.file_url}]
+        )
+        comment = frappe.get_all(
+            "HD Ticket Comment", {"reference_ticket": ticket.name}, pluck="name"
+        )[0]
+        self.assertTrue(
+            self.has_copy(for_comment.file_url, "HD Ticket Comment", comment)
+        )
+
+    def test_merge_copies_a_customers_attachments(self):
+        frappe.set_user(self.customer)
+        source = make_ticket(description="Source")
+        upload = make_private_file(self.customer)
+        source.create_communication_via_contact(
+            message="With a file", attachments=[{"name": upload.name}]
+        )
+        frappe.set_user("Administrator")
+        target = make_ticket(description="Target")
+
+        frappe.set_user(agent)
+        merge_ticket(source=source.name, target=target.name)
+
+        self.assertTrue(self.has_copy(upload.file_url, "HD Ticket", target.name))
 
 
 MERGE_FLAG = "test_merge_flag"
