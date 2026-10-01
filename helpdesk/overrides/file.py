@@ -33,6 +33,7 @@ class HelpdeskFile(File):
             self.validate_fixed_fields()
             self.validate_reattachment()
             self.validate_unshared_privacy_change()
+            self.validate_privacy_change_keeps_url_unique()
         super().validate()
 
     def validate_canonical_file_url(self):
@@ -131,23 +132,32 @@ class HelpdeskFile(File):
         Frappe v15 moves the file on disk and rewrites every File with the
         same content hash, including other users'. Remove when Frappe copies
         instead (frappe/frappe 8a0a5ae07f on develop).
-
-        Also refused when the URL the file would move to matches another
-        File's URL ignoring case, as for new files (save_file_on_filesystem):
-        Frappe only checks that the exact path is free on disk.
         """
         if not self.has_value_changed("is_private"):
             return
         # the rewrite uses this document's content_hash, which the caller can set
         before = self.get_doc_before_save() or self
-        if any(
-            self._shares_with_another_file(doc) for doc in (self, before)
-        ) or self._url_in_use(self._toggled_url(before.file_url)):
+        if any(self._shares_with_another_file(doc) for doc in (self, before)):
             frappe.throw(
                 _(
                     "This file is shared with other records, so its privacy can't be changed"
                 )
             )
+
+    def validate_privacy_change_keeps_url_unique(self):
+        """Refuse a privacy change that would give the file a URL another
+        File's URL matches, ignoring case.
+
+        The database compares file_url case-insensitively, as for new files
+        (save_file_on_filesystem); Frappe's toggle only checks that the exact
+        path is free on disk. Remove when Frappe compares file URLs exactly
+        (no upstream change yet).
+        """
+        if not self.has_value_changed("is_private"):
+            return
+        before = self.get_doc_before_save() or self
+        if self._url_in_use(self._toggled_url(before.file_url)):
+            frappe.throw(_("A file with the same name already exists"))
 
     def _shares_with_another_file(self, doc) -> bool:
         for fieldname in ("file_url", "content_hash"):
