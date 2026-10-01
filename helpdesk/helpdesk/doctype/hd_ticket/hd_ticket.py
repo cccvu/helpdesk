@@ -6,13 +6,16 @@ from html import unescape
 import frappe
 from bs4 import BeautifulSoup, Comment
 from frappe import _
-from frappe.core.page.permission_manager.permission_manager import remove
 from frappe.desk.form.assign_to import add as assign
 from frappe.desk.form.assign_to import clear as clear_all_assignments
 from frappe.desk.form.assign_to import get as get_assignees
 from frappe.email.email_body import EMBED_PATTERN, get_message_id
 from frappe.model.document import Document
-from frappe.permissions import add_permission, update_permission_property
+from frappe.permissions import (
+    add_permission,
+    setup_custom_perms,
+    update_permission_property,
+)
 from frappe.utils import (
     add_to_date,
     cint,
@@ -1586,10 +1589,21 @@ def set_guest_ticket_creation_permission():
 
 
 def remove_guest_ticket_creation_permission():
+    # Not Frappe's permission_manager.remove: that is the Role Permission Manager's
+    # endpoint and only a System Manager may call it, but HD Settings runs this on
+    # every save, by anyone allowed to save HD Settings (Agent Manager too). This
+    # only removes a rule; adding the Guest rule still needs Custom DocPerm create.
+    from frappe.core.doctype.doctype.doctype import validate_permissions_for_doctype
+
     doctype = "HD Ticket"
-    role = "Guest"
-    permlevel = 0
-    remove(doctype, role, permlevel, 1)
+    setup_custom_perms(doctype)
+    for name in frappe.get_all(
+        "Custom DocPerm",
+        filters={"parent": doctype, "role": "Guest", "permlevel": 0, "if_owner": 1},
+        pluck="name",
+    ):
+        frappe.delete_doc("Custom DocPerm", name, ignore_permissions=True, force=True)
+    validate_permissions_for_doctype(doctype, for_remove=True, alert=True)
 
 
 customer_not_allowed_fields = ["customer"]

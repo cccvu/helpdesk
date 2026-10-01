@@ -494,6 +494,31 @@ def make_agent_manager(email: str, first_name: str = "Test Manager"):
     return email
 
 
+def save_hd_settings_as(user: str, **values):
+    """
+    Set `values` on HD Settings and save it as `user`, with in_test off so
+    frappe.only_for checks run as they do outside tests. Restores Administrator.
+    """
+    frappe.set_user(user)
+    frappe.flags.in_test = False
+    try:
+        settings = frappe.get_doc("HD Settings")
+        settings.update(values)
+        settings.save()
+    finally:
+        frappe.flags.in_test = True
+        frappe.set_user("Administrator")
+
+
+def get_guest_ticket_permissions():
+    """Names of the Custom DocPerm rows that let Guests create HD Tickets."""
+    return frappe.get_all(
+        "Custom DocPerm",
+        filters={"parent": "HD Ticket", "role": "Guest", "permlevel": 0},
+        pluck="name",
+    )
+
+
 def user_roles(email: str) -> set[str]:
     """The user's roles as stored, bypassing the roles cache."""
     return set(
