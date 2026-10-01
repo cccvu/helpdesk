@@ -2788,6 +2788,38 @@ class TestTicketFileAccess(FrappeTestCase):
             "nothing is written before the check",
         )
 
+    def test_portal_reply_refuses_malformed_attachments(self):
+        frappe.set_user(self.customer)
+        ticket = make_ticket()
+        replies = frappe.db.count(
+            "Communication",
+            {"reference_doctype": "HD Ticket", "reference_name": ticket.name},
+        )
+
+        for attachments in (["a-file-name"], [{"file_url": "/files/x.png"}], [None]):
+            with self.subTest(attachments), self.assertRaises(frappe.PermissionError):
+                ticket.create_communication_via_contact(
+                    message="Malformed", attachments=attachments
+                )
+
+        self.assertEqual(
+            frappe.db.count(
+                "Communication",
+                {"reference_doctype": "HD Ticket", "reference_name": ticket.name},
+            ),
+            replies,
+            "nothing is written before the check",
+        )
+
+    def test_file_move_check_refuses_anything_but_a_name(self):
+        """frappe.db.get_value reads a dict as filters, which would match a File."""
+        frappe.set_user(self.customer)
+        ticket = make_ticket()
+        make_private_file(self.customer)
+        for name in ({"owner": self.customer}, None, 1):
+            with self.subTest(name), self.assertRaises(frappe.PermissionError):
+                ticket.check_files_can_move_here([name])
+
     def test_new_ticket_moves_own_uploads(self):
         frappe.set_user(self.customer)
         upload = make_private_file(self.customer)

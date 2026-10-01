@@ -886,7 +886,8 @@ class HDTicket(Document):
         self, message: str, attachments: list[dict] = [], new_ticket: bool = False
     ):
         _attachments = self.get("attachments") or attachments or []
-        self.check_files_can_move_here([i["name"] for i in _attachments])
+        names = [i.get("name") if isinstance(i, dict) else None for i in _attachments]
+        self.check_files_can_move_here(names)
 
         if not new_ticket and frappe.db.get_single_value(
             "HD Settings", "enable_reply_email_to_agent"
@@ -914,10 +915,10 @@ class HDTicket(Document):
         c.ignore_mandatory = True
         c.save(ignore_permissions=True)
 
-        if not len(_attachments):
+        if not names:
             return
         QBFile = frappe.qb.DocType("File")
-        condition_name = [QBFile.name == i["name"] for i in _attachments]
+        condition_name = [QBFile.name == name for name in names]
         frappe.qb.update(QBFile).set(QBFile.attached_to_name, c.name).set(
             QBFile.attached_to_doctype, "Communication"
         ).where(Criterion.any(condition_name)).run()
@@ -934,7 +935,7 @@ class HDTicket(Document):
         ticket, may be moved onto a message on it. The move is a direct database
         update, so File permission checks don't run."""
         for name in names:
-            # a dict would be read as filters
+            # anything but a name (a dict would be read as filters) is refused
             file = isinstance(name, str) and frappe.db.get_value(
                 "File",
                 name,
