@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+from frappe.email.email_body import EMBED_PATTERN
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_to_date, get_datetime, getdate, now_datetime
 
@@ -929,6 +930,28 @@ class TestHDTicket(FrappeTestCase):
             with self.subTest(src):
                 content = f'<img src="{src}"/>'
                 self.assertEqual(ticket.parse_content(content), content)
+
+    def test_parse_content_disarms_embeds_it_did_not_set(self):
+        """Frappe's mail builder reads every embed="..." in the HTML from disk,
+        wherever it appears; only the ones parse_content set may stay."""
+        ticket = make_ticket()
+        own = make_private_file(agent, file_name="own.png")
+        foreign = make_private_file(non_agent, file_name="foreign.png")
+        frappe.set_user(agent)
+        url = foreign.file_url
+
+        for content in (
+            f'<p embed="{url}">on another tag</p>',
+            f'<img src="https://example.com/a.png" data-embed="{url}"/>',
+            f'<p>plain text embed="{url}"</p>',
+            f"<p>escaped text embed=&quot;{url}&quot;</p>",
+            f"<p title=\"embed='{url}'\">in an attribute value</p>",
+        ):
+            with self.subTest(content):
+                self.assertIsNone(EMBED_PATTERN.search(ticket.parse_content(content)))
+
+        parsed = ticket.parse_content(f'<p>embed="{url}"</p><img src="{own.file_url}">')
+        self.assertEqual(EMBED_PATTERN.findall(parsed), [own.file_url])
 
     def test_ticket_inside_working_hours(self):
         inside_working_hour = get_current_week_monday(hours=14)
@@ -2819,6 +2842,15 @@ class TestTicketFileAccess(FrappeTestCase):
         for name in ({"owner": self.customer}, None, 1):
             with self.subTest(name), self.assertRaises(frappe.PermissionError):
                 ticket.check_files_can_move_here([name])
+
+    def test_reply_mail_to_agents_embeds_nothing(self):
+        """The portal reply goes into the agents' mail as written."""
+        foreign = make_private_file(agent)
+        ticket = make_ticket()
+        ticket.assign_agent(agent)
+        with patch("frappe.sendmail") as sendmail:
+            ticket.send_reply_email_to_agent(f'<p>embed="{foreign.file_url}"</p>')
+        self.assertIsNone(EMBED_PATTERN.search(sendmail.call_args.kwargs["message"]))
 
     def test_new_ticket_moves_own_uploads(self):
         frappe.set_user(self.customer)

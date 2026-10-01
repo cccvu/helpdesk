@@ -1,6 +1,8 @@
 import frappe
 from frappe.model.document import Document
 
+from helpdesk.file_access import disarm_embeds
+
 
 class HDNotification(Document):
     def format_message(self):
@@ -36,8 +38,8 @@ class HDNotification(Document):
         if soup.find("img"):
             img = soup.find("img")
             img["src"] = ("").join([frappe.utils.get_url(), img["src"]])
-            return str(soup)
-        return str(soup)
+        # the comment goes into the mail, which embeds any embed="..." path
+        return disarm_embeds(str(soup))
 
     def get_args(self):
         if self.notification_type == "Mention":

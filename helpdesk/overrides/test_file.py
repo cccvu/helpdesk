@@ -1,8 +1,9 @@
 import frappe
 from frappe.core.doctype.file.utils import find_file_by_url
+from frappe.email.email_body import EMBED_PATTERN
 from frappe.tests.utils import FrappeTestCase
 
-from helpdesk.file_access import can_read_file_url
+from helpdesk.file_access import can_read_file_url, disarm_embeds
 from helpdesk.test_utils import make_agent, make_private_file, make_ticket
 
 OWNER = "file-owner@example.com"
@@ -220,3 +221,23 @@ class TestFileAccess(FrappeTestCase):
         doc.file_name = victim.file_url.rsplit("/", 1)[1]
         with self.assertRaises(frappe.PermissionError):
             doc.save()
+
+    def test_disarm_embeds(self):
+        kept = "/private/files/kept.png"
+        html = (
+            # an attribute value hiding a second match inside the first
+            "<p title=\"embed='/private/files/a'\" embed=\"embed='/private/files/b'\">"
+            f'<img embed="{kept}"></p>'
+        )
+        self.assertEqual(EMBED_PATTERN.findall(disarm_embeds(html, {kept})), [kept])
+        self.assertIsNone(EMBED_PATTERN.search(disarm_embeds(html)))
+        self.assertEqual(disarm_embeds(""), "")
+
+    def test_mention_mail_embeds_nothing(self):
+        notification = frappe.get_doc(
+            {
+                "doctype": "HD Notification",
+                "message": '<p>embed="/private/files/x.png"</p>',
+            }
+        )
+        self.assertIsNone(EMBED_PATTERN.search(notification.parse_html()))

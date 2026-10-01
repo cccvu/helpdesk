@@ -1,4 +1,5 @@
 import frappe
+from frappe.email.email_body import EMBED_PATTERN
 
 
 def can_read_file_url(file_url: str, user: str | None = None) -> bool:
@@ -22,3 +23,26 @@ def can_read_file_url(file_url: str, user: str | None = None) -> bool:
         if frappe.get_doc("File", row.name).has_permission("read", user=user):
             return True
     return False
+
+
+def disarm_embeds(html: str, keep: set[str] | frozenset[str] = frozenset()) -> str:
+    """Break every `embed="<path>"` in `html` whose path isn't in `keep`.
+
+    Frappe's mail builder reads every such path from disk into the mail,
+    without a permission check, wherever the text appears in the HTML: on any
+    tag, in an attribute value or as plain text (`EMBED_PATTERN` in
+    frappe.email.email_body). A zero-width space after "embed" stops the
+    pattern matching, and survives the HTML being parsed and written again.
+    Every position a match can start at is checked, so overlapping matches
+    can't hide one another.
+    """
+    if not html:
+        return html
+    pos = 0
+    while match := EMBED_PATTERN.search(html, pos):
+        start = match.start()
+        if match.group(1) not in keep:
+            cut = start + len("embed")
+            html = html[:cut] + "​" + html[cut:]
+        pos = start + 1
+    return html
