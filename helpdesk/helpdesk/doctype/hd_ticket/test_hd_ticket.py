@@ -5,6 +5,7 @@ import hashlib
 from contextlib import contextmanager
 from datetime import timedelta
 from email import message_from_string
+from html import escape, unescape
 from unittest.mock import patch
 
 import frappe
@@ -88,9 +89,10 @@ def sent_replies(ticket_name: str):
 REPLY_ACCOUNT_EMAIL = "reply-to-test@example.com"
 
 
-def send_reply_with_template(ticket, template: str | None):
-    """Email an agent reply on `ticket` with `template` as HD Settings'
-    reply_to_template, and return the kwargs frappe.sendmail was called with."""
+def send_reply_with_template(ticket, template: str | None, message: str = "Reply"):
+    """Email an agent reply `message` on `ticket` with `template` as HD
+    Settings' reply_to_template, and return the kwargs frappe.sendmail was
+    called with."""
     email_account = frappe.get_doc(
         {
             "doctype": "Email Account",
@@ -112,7 +114,7 @@ def send_reply_with_template(ticket, template: str | None):
     try:
         with patch("frappe.sendmail") as sendmail:
             ticket.reply_via_agent(
-                message="Reply",
+                message=message,
                 to="customer@test.com",
                 from_email={
                     "email_account": email_account.name,
@@ -952,6 +954,17 @@ class TestHDTicket(FrappeTestCase):
 
         parsed = ticket.parse_content(f'<p>embed="{url}"</p><img src="{own.file_url}">')
         self.assertEqual(EMBED_PATTERN.findall(parsed), [own.file_url])
+
+    def test_portal_reply_mail_keeps_the_agents_inline_image(self):
+        """The embed parse_content approved survives the portal reply template,
+        including a file name that is escaped in HTML."""
+        image = make_private_file("Administrator", file_name="Q&A.png")
+        ticket = make_ticket(via_customer_portal=1)
+        kwargs = send_reply_with_template(
+            ticket, None, message=f'<p>See</p><img src="{escape(image.file_url)}">'
+        )
+        embeds = [unescape(path) for path in EMBED_PATTERN.findall(kwargs["message"])]
+        self.assertEqual(embeds, [image.file_url])
 
     def test_ticket_inside_working_hours(self):
         inside_working_hour = get_current_week_monday(hours=14)

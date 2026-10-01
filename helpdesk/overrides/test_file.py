@@ -1,3 +1,6 @@
+import time
+from html import unescape
+
 import frappe
 from frappe.core.doctype.file.utils import find_file_by_url
 from frappe.email.email_body import EMBED_PATTERN
@@ -233,6 +236,45 @@ class TestFileAccess(FrappeTestCase):
         self.assertIsNone(EMBED_PATTERN.search(disarm_embeds(html)))
         self.assertEqual(disarm_embeds(""), "")
 
+    def test_disarm_embeds_compares_unescaped_paths(self):
+        """The mail builder unescapes the path it reads."""
+        kept = "/private/files/Q&A.png"
+        html = '<img embed="/private/files/Q&amp;A.png">'
+        self.assertEqual(disarm_embeds(html, {kept}), html)
+        self.assertEqual(disarm_embeds(html, {"/private/files/Q&amp;A.png"}), html)
+        self.assertIsNone(EMBED_PATTERN.search(disarm_embeds(html)))
+
+    def test_disarm_embeds_matches_inserting_at_each_match(self):
+        """Cutting once at the end gives what inserting at each match gave."""
+
+        def reference(html, keep):
+            pos = 0
+            while match := EMBED_PATTERN.search(html, pos):
+                if unescape(match.group(1)) not in keep:
+                    cut = match.start() + len("embed")
+                    html = html[:cut] + "\u200b" + html[cut:]
+                pos = match.start() + 1
+            return html
+
+        kept = "/private/files/kept.png"
+        html = (
+            "<p title=\"embed='/private/files/a'\" embed=\"embed='/private/files/b'\">"
+            f'embed="{kept}" text embed=\'/files/c\' <img data-embed="{kept}">'
+            "embedembed='x' embed=\"unclosed</p>"
+        )
+        for keep in (set(), {kept}):
+            with self.subTest(keep=keep):
+                self.assertEqual(disarm_embeds(html, keep), reference(html, keep))
+
+    def test_disarm_embeds_is_linear(self):
+        chunk = '<p embed="/private/files/x.png">a</p>'
+        html = chunk * (2**20 // len(chunk))  # about 1 MiB, 28,000 embeds
+        started = time.monotonic()
+        disarmed = disarm_embeds(html)
+        # copying the string once per match took about 30 s
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertIsNone(EMBED_PATTERN.search(disarmed))
+
     def test_privacy_toggle_cannot_make_a_case_variant_url(self):
         """Frappe's toggle only checks that the exact path is free on disk."""
         name = f"probe{frappe.generate_hash(length=6)}"
@@ -263,3 +305,4 @@ class TestFileAccess(FrappeTestCase):
             }
         )
         self.assertIsNone(EMBED_PATTERN.search(notification.parse_html()))
+

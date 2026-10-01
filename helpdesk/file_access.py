@@ -1,3 +1,5 @@
+from html import unescape
+
 import frappe
 from frappe.email.email_body import EMBED_PATTERN
 
@@ -31,18 +33,23 @@ def disarm_embeds(html: str, keep: set[str] | frozenset[str] = frozenset()) -> s
     Frappe's mail builder reads every such path from disk into the mail,
     without a permission check, wherever the text appears in the HTML: on any
     tag, in an attribute value or as plain text (`EMBED_PATTERN` in
-    frappe.email.email_body). A zero-width space after "embed" stops the
-    pattern matching, and survives the HTML being parsed and written again.
-    Every position a match can start at is checked, so overlapping matches
-    can't hide one another.
+    frappe.email.email_body). Paths are compared HTML-unescaped, as the mail
+    builder reads them. A zero-width space after "embed" stops the pattern
+    matching, and survives the HTML being parsed and written again. Every
+    position a match can start at is checked, so overlapping matches can't
+    hide one another.
     """
     if not html:
         return html
+    keep = {unescape(path) for path in keep}
+    cuts = []
     pos = 0
     while match := EMBED_PATTERN.search(html, pos):
-        start = match.start()
-        if match.group(1) not in keep:
-            cut = start + len("embed")
-            html = html[:cut] + "​" + html[cut:]
-        pos = start + 1
-    return html
+        if unescape(match.group(1)) not in keep:
+            cuts.append(match.start() + len("embed"))
+        pos = match.start() + 1
+    if not cuts:
+        return html
+    # one join: inserting at each cut would copy the string once per match
+    bounds = [0, *cuts, len(html)]
+    return "\u200b".join(html[a:b] for a, b in zip(bounds, bounds[1:]))
