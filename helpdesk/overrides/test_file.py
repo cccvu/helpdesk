@@ -3,6 +3,7 @@ import os
 import time
 import unittest
 from html import unescape
+from unittest.mock import patch
 
 import frappe
 from frappe.core.doctype.file.utils import find_file_by_url
@@ -306,6 +307,31 @@ class TestFileAccess(FrappeTestCase):
         self.assertEqual(
             frappe.db.get_value("File", victim.name, "file_url"), victim.file_url
         )
+
+    def test_mention_mail_title_embeds_nothing(self):
+        """The title names the mentioner, who chose their own name."""
+        mentioner = frappe.get_doc(
+            {
+                "doctype": "User",
+                "email": "file-mentioner@example.com",
+                "first_name": 'Ann embed="/private/files/x.png"',
+                "send_welcome_email": 0,
+            }
+        ).insert(ignore_permissions=True, ignore_if_duplicate=True)
+        self.assertIn("embed=", mentioner.full_name, "the name is kept as typed")
+        with patch("frappe.sendmail") as sendmail:
+            frappe.get_doc(
+                {
+                    "doctype": "HD Notification",
+                    "notification_type": "Mention",
+                    "user_from": mentioner.name,
+                    "user_to": OWNER,
+                    "message": "<p>Hello</p>",
+                }
+            ).insert(ignore_permissions=True)
+        sent = sendmail.call_args.kwargs
+        for text in (sent["message"], sent["args"]["title"]):
+            self.assertIsNone(EMBED_PATTERN.search(text))
 
     def test_mention_mail_embeds_nothing(self):
         notification = frappe.get_doc(
