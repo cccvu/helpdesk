@@ -1,0 +1,174 @@
+import frappe
+from frappe.tests.utils import FrappeTestCase
+
+from helpdesk.file_access import can_read_file_url
+from helpdesk.test_utils import make_agent, make_private_file, make_ticket
+
+OWNER = "file-owner@example.com"
+OTHER = "file-other@example.com"
+
+
+class TestFileAccess(FrappeTestCase):
+    """The File access checks in helpdesk.overrides.file and
+    helpdesk.extends.attach_field, and the helper they share."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        make_agent(OWNER, first_name="File Owner")
+        make_agent(OTHER, first_name="File Other")
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def test_can_read_file_url(self):
+        mine = make_private_file(OWNER)
+        self.assertTrue(can_read_file_url(mine.file_url, user=OWNER))
+        self.assertTrue(can_read_file_url(mine.file_url, user="Administrator"))
+        self.assertFalse(can_read_file_url(mine.file_url, user=OTHER))
+        self.assertFalse(can_read_file_url("/private/files/missing.txt", user=OWNER))
+        self.assertFalse(can_read_file_url("", user=OWNER))
+        # the database matches file_url case-insensitively; files on disk don't
+        self.assertFalse(can_read_file_url(mine.file_url.upper(), user=OWNER))
+
+    def test_identical_bytes_from_two_users_share_a_readable_url(self):
+        content = frappe.generate_hash().encode()
+        first = make_private_file(OWNER, content=content)
+        second = make_private_file(OTHER, content=content)
+        self.assertEqual(second.file_url, first.file_url)
+        self.assertTrue(can_read_file_url(second.file_url, user=OTHER))
+
+        # and the second uploader can still use it in an Attach field
+        ticket = make_ticket()
+        frappe.set_user(OTHER)
+        ticket.reload()
+        ticket.attachment = second.file_url
+        ticket.save()
+
+    def test_file_url_and_owner_cannot_change(self):
+        victim = make_private_file(OWNER)
+        ticket = make_ticket()
+        mine = make_private_file(
+            OTHER, attached_to_doctype="HD Ticket", attached_to_name=ticket.name
+        )
+        frappe.set_user(OTHER)
+        for fieldname, value in (("file_url", victim.file_url), ("owner", OWNER)):
+            with self.subTest(fieldname):
+                doc = frappe.get_doc("File", mine.name)
+                doc.set(fieldname, value)
+                with self.assertRaises(frappe.PermissionError):
+                    doc.save()
+        self.assertEqual(frappe.db.get_value("File", mine.name, "owner"), OTHER)
+
+    def test_reattachment_needs_write_on_the_file_and_the_new_document(self):
+        ticket = make_ticket()
+        victim = make_private_file(OWNER)
+        mine = make_private_file(OTHER)
+        frappe.set_user(OTHER)
+
+        # someone else's unattached file, onto a ticket the caller can write
+        doc = frappe.get_doc("File", victim.name)
+        doc.attached_to_doctype, doc.attached_to_name = "HD Ticket", ticket.name
+        with self.assertRaises(frappe.PermissionError):
+            doc.save()
+
+        # the caller's own file, onto a document the caller can't write
+        doc = frappe.get_doc("File", mine.name)
+        doc.attached_to_doctype, doc.attached_to_name = "User", OWNER
+        with self.assertRaises(frappe.PermissionError):
+            doc.save()
+
+        frappe.set_user("Administrator")
+        self.assertFalse(frappe.db.get_value("File", victim.name, "attached_to_name"))
+        self.assertFalse(frappe.db.get_value("File", mine.name, "attached_to_name"))
+
+    def test_own_file_can_be_attached_to_a_writable_ticket(self):
+        ticket = make_ticket()
+        mine = make_private_file(OTHER)
+        frappe.set_user(OTHER)
+        doc = frappe.get_doc("File", mine.name)
+        doc.attached_to_doctype, doc.attached_to_name = "HD Ticket", ticket.name
+        doc.save()
+        self.assertEqual(
+            frappe.db.get_value("File", mine.name, "attached_to_name"), ticket.name
+        )
+
+    def test_privacy_change_refused_on_a_shared_file(self):
+        content = frappe.generate_hash().encode()
+        victim = make_private_file(OWNER, content=content)
+        twin = make_private_file(OTHER, content=content)
+        frappe.set_user(OTHER)
+
+        doc = frappe.get_doc("File", twin.name)
+        doc.is_private = 0
+        with self.assertRaises(frappe.ValidationError):
+            doc.save()
+
+        # a content_hash set by the caller counts too: the rewrite uses it
+        doc = frappe.get_doc("File", make_private_file(OTHER).name)
+        doc.content_hash = victim.content_hash
+        doc.is_private = 0
+        with self.assertRaises(frappe.ValidationError):
+            doc.save()
+
+        self.assertEqual(
+            frappe.db.get_value("File", victim.name, ["is_private", "file_url"]),
+            (1, victim.file_url),
+        )
+
+    def test_privacy_change_on_an_unshared_own_file(self):
+        mine = make_private_file(OWNER)
+        frappe.set_user(OWNER)
+        doc = frappe.get_doc("File", mine.name)
+        doc.is_private = 0
+        doc.save()
+        # the class's rollback moves the file back to private
+        self.assertTrue(doc.file_url.startswith("/files/"))
+
+    def test_optimize_file_works_on_the_stored_record(self):
+        victim = make_private_file(OWNER)
+        frappe.set_user(OTHER)
+        # run_doc_method can build the document from the request
+        forged = frappe.get_doc({**victim.as_dict(), "owner": OTHER})
+        with self.assertRaises(frappe.PermissionError):
+            forged.optimize_file()
+
+    def test_non_canonical_file_url_refused(self):
+        victim = make_private_file(OWNER)
+        name = victim.file_url.rsplit("/", 1)[1]
+        frappe.set_user(OTHER)
+        for url in (
+            f"/private/files/./{name}",
+            f"/private/files//{name}",
+            f"/private/files/%2e/{name}",
+            f"/private/files/%252e/{name}",
+            f"//private/files/{name}",
+        ):
+            with self.subTest(url):
+                file = frappe.get_doc(
+                    {"doctype": "File", "file_url": url, "is_private": 1}
+                )
+                with self.assertRaises(frappe.ValidationError):
+                    file.insert(ignore_permissions=True)
+
+    def test_attach_field_refuses_an_unreadable_private_file(self):
+        ticket = make_ticket()
+        victim = make_private_file(OWNER)
+        frappe.set_user(OTHER)
+        ticket.reload()
+        ticket.attachment = victim.file_url
+        with self.assertRaises(frappe.PermissionError):
+            ticket.save()
+        frappe.set_user("Administrator")
+        self.assertFalse(frappe.db.get_value("File", victim.name, "attached_to_name"))
+
+    def test_attach_field_takes_own_upload(self):
+        ticket = make_ticket()
+        mine = make_private_file(OWNER)
+        frappe.set_user(OWNER)
+        ticket.reload()
+        ticket.attachment = mine.file_url
+        ticket.save()
+        self.assertEqual(
+            frappe.db.get_value("File", mine.name, "attached_to_name"), ticket.name
+        )
