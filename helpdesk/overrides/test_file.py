@@ -1,4 +1,5 @@
 import frappe
+from frappe.core.doctype.file.utils import find_file_by_url
 from frappe.tests.utils import FrappeTestCase
 
 from helpdesk.file_access import can_read_file_url
@@ -172,3 +173,50 @@ class TestFileAccess(FrappeTestCase):
         self.assertEqual(
             frappe.db.get_value("File", mine.name, "attached_to_name"), ticket.name
         )
+
+    def test_case_variant_upload_gets_its_own_url(self):
+        """The database matches file_url case-insensitively, so a new file
+        whose URL differs from another's only in case would share its rows."""
+        name = f"probe{frappe.generate_hash(length=6)}"
+        first = make_private_file(OWNER, file_name=f"{name}.txt")
+        second = make_private_file(OTHER, file_name=f"{name}.txt".upper())
+
+        self.assertNotEqual(second.file_url.lower(), first.file_url.lower())
+        self.assertFalse(can_read_file_url(first.file_url, user=OTHER))
+        self.assertFalse(frappe.has_permission("File", "read", doc=first, user=OTHER))
+        frappe.set_user(OTHER)
+        self.assertIsNone(find_file_by_url(first.file_url))
+
+    def test_file_without_url_or_content_refused(self):
+        victim = make_private_file(OWNER)
+        frappe.set_user(OTHER)
+        file = frappe.get_doc(
+            {
+                "doctype": "File",
+                "file_name": victim.file_url.rsplit("/", 1)[1],
+                "is_private": 1,
+            }
+        )
+        with self.assertRaises(frappe.ValidationError):
+            file.insert(ignore_permissions=True)
+
+    def test_file_name_fixed_on_a_file_without_url(self):
+        """Such a File is read from disk by its file_name."""
+        victim = make_private_file(OWNER)
+        # made before this check existed, or by a path that skips it
+        stray = frappe.get_doc(
+            {
+                "doctype": "File",
+                "file_name": "stray.txt",
+                "is_private": 1,
+            }
+        )
+        stray.name = frappe.generate_hash(length=10)
+        stray.db_insert()
+        frappe.db.set_value("File", stray.name, "owner", OTHER)
+
+        frappe.set_user(OTHER)
+        doc = frappe.get_doc("File", stray.name)
+        doc.file_name = victim.file_url.rsplit("/", 1)[1]
+        with self.assertRaises(frappe.PermissionError):
+            doc.save()
