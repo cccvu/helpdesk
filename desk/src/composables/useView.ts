@@ -25,6 +25,11 @@ const debouncedSetValue = useDebounceFn(
   300
 );
 
+// Default-view inserts in flight, keyed like HD View's validate_default_view
+// (one default per user and doctype). A write that arrives before
+// views.reload() shows the new view updates it instead of inserting a second
+// default, which the server would refuse.
+const defaultViewInserts = new Map<string, Promise<string>>();
 
 export const views = createListResource({
   doctype: "HD View",
@@ -160,18 +165,36 @@ export function useView(dt: string = null) {
     const defaultView = views.data?.find(
       (v: View) => v.is_default && v.user === auth.userId && v.dt === view.dt
     );
+    const key = `${auth.userId}:${view.dt}`;
+    const pending = defaultViewInserts.get(key);
     view.is_customer_portal = isCustomerPortal.value;
     if (defaultView) {
       delete view["name"];
 
        debouncedSetValue("HD View", defaultView.name, view);
+    } else if (pending) {
+      // the insert hasn't reached views.data yet: update the view it creates
+      delete view["name"];
+      pending.then(
+        (name) => debouncedSetValue("HD View", name, view),
+        () => {} // the insert logs its own failure, as before
+      );
     } else {
-      view["doctype"] = "HD View";
       // create default view
-      createView({
-        ...view,
-        is_default: true,
-      });
+      const insert = call("frappe.client.insert", {
+        doc: {
+          ...view,
+          doctype: "HD View",
+          is_default: true,
+          user: auth.userId,
+        },
+      }).then((d: View) => d.name);
+      defaultViewInserts.set(key, insert);
+      // kept until views.data holds the new view, or the insert failed
+      insert
+        .then(() => views.reload())
+        .catch((e) => console.log("error", e))
+        .finally(() => defaultViewInserts.delete(key));
     }
   }
 
