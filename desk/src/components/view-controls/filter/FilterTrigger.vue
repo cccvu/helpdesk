@@ -14,22 +14,21 @@
         </span>
       </template>
     </Button>
-    <Tooltip v-if="count" :text="__('Clear all Filter')">
-      <div>
-        <Button
-          class="rounded-s-none border-s"
-          icon="lucide-x"
-          @click.stop="$emit('clear')"
-        />
-      </div>
-    </Tooltip>
+    <Button
+      v-if="count"
+      class="rounded-s-none border-s"
+      icon="lucide-x"
+      :label="__('Clear all filters')"
+      :tooltip="__('Clear all filters')"
+      @click.stop="$emit('clear')"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import FilterIcon from "@/components/icons/FilterIcon.vue";
 import { __ } from "@/translation";
-import { Button, Tooltip } from "frappe-ui";
+import { Button } from "frappe-ui";
 
 interface P {
   count: number;
