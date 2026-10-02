@@ -254,7 +254,7 @@ function handleResponseByField(row: any, item: string) {
   return h(
     Tooltip,
     {
-      text: dayjsLocal(item).format("LLLL"),
+      text: dayjsLocal(item).format("LLLL z"),
     },
     // data-row-peek: above the row link, so the tooltip opens on hover;
     // a click still opens the ticket through the row fallback.
@@ -300,7 +300,7 @@ function handleResolutionByField(row: any, item: string) {
   return h(
     Tooltip,
     {
-      text: dayjsLocal(item).format("LLLL"),
+      text: dayjsLocal(item).format("LLLL z"),
     },
     // data-row-peek: above the row link, so the tooltip opens on hover;
     // a click still opens the ticket through the row fallback.

@@ -187,6 +187,9 @@ export function prettyDate(date, mini = false) {
 }
 
 export const dateTooltipFormat = "ddd, MMM D, YYYY h:mm A";
+// SLA deadlines name their time zone: the zone they are shown in (the user's
+// profile zone) can differ from the one the reader is in.
+export const slaTooltipFormat = `${dateTooltipFormat} z`;
 
 export function errorMessage(title, message) {
   toast.error(message);

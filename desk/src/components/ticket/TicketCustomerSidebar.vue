@@ -60,7 +60,7 @@
         <div
           class="break-words text-base text-ink-gray-8 flex items-center gap-2"
         >
-          <Tooltip :text="dateFormat(data.value, dateTooltipFormat)">
+          <Tooltip :text="dateFormat(data.value, slaTooltipFormat)">
             <span class="truncate text-base" :class="data.textColor">
               {{ __(data.label) }}
             </span>
@@ -128,7 +128,7 @@ import {
 } from "@/composables/useSLA";
 import { ITicket } from "@/pages/ticket/symbols";
 import { Field } from "@/types";
-import { dateFormat, dateTooltipFormat } from "@/utils";
+import { dateFormat, dateTooltipFormat, slaTooltipFormat } from "@/utils";
 import { Avatar, dayjs, dayjsLocal, Tooltip } from "frappe-ui";
 import { computed, inject } from "vue";
 

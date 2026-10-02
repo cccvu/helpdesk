@@ -23,7 +23,7 @@
       :key="data.title"
       class="flex items-center gap-4"
     >
-      <Tooltip :text="dayjs(data.value).format('LLLL')">
+      <Tooltip :text="dateFormat(data.value, slaTooltipFormat)">
         <span class="w-[150px] shrink-0 text-p-sm text-ink-gray-5">{{
           data.title
         }}</span>
@@ -54,7 +54,6 @@
 </template>
 
 <script setup lang="ts">
-import { dayjs } from "frappe-ui";
 import {
   slaLabel,
   slaTextColor,
@@ -62,6 +61,7 @@ import {
   type SLAMetric,
 } from "@/composables/useSLA";
 import { Field } from "@/types";
+import { dateFormat, slaTooltipFormat } from "@/utils";
 import { computed, inject } from "vue";
 import { ITicket } from "./symbols";
 
