@@ -234,7 +234,9 @@ function getSortLabel() {
     (option) => option.value === values[0].fieldname
   )?.label;
 
-  return __(label) || __(sort.fieldname);
+  // No label when the sort field isn't sortable here (e.g. a view's saved
+  // order_by): fall back to the fieldname, an identifier, so untranslated.
+  return __(label) || values[0].fieldname;
 }
 
 function setSort(data) {

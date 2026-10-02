@@ -63,7 +63,7 @@
                         <Button
                           variant="ghost"
                           icon="lucide-arrow-left-right"
-                          :aria-label="__('Replace filter')"
+                          :label="__('Replace filter')"
                           :tooltip="__('Replace filter')"
                           :class="revealOnRowActivity"
                           @click="replaceFilter(filter)"
@@ -71,7 +71,7 @@
                         <Button
                           variant="ghost"
                           icon="lucide-x"
-                          :aria-label="__('Remove filter')"
+                          :label="__('Remove filter')"
                           :tooltip="__('Remove filter')"
                           :class="revealOnRowActivity"
                           @click="removeFilter(filter.index)"

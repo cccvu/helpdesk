@@ -11,34 +11,20 @@
         />
       </template>
       <template #right-header>
-        <RouterLink
-          class="inline-flex"
-          :to="{ name: isCustomerPortal ? 'TicketNew' : 'TicketAgentNew' }"
+        <Button
+          class="rtl:flex-row-reverse"
+          :label="__('Create')"
+          theme="gray"
+          variant="solid"
+          :route="{ name: isCustomerPortal ? 'TicketNew' : 'TicketAgentNew' }"
         >
-          <Button
-            class="rtl:flex-row-reverse"
-            :label="__('Create')"
-            theme="gray"
-            variant="solid"
-          >
-            <template #prefix>
-              <LucidePlus class="h-4 w-4" />
-            </template>
-          </Button>
-        </RouterLink>
+          <template #prefix>
+            <LucidePlus class="h-4 w-4" />
+          </template>
+        </Button>
       </template>
     </LayoutHeader>
-    <ListViewBuilder
-      ref="listViewRef"
-      :options="options"
-      @row-click="
-        (row) =>
-          $router.push({
-            name: isCustomerPortal ? 'TicketCustomer' : 'TicketAgent',
-            params: { ticketId: row },
-          })
-      "
-    />
+    <ListViewBuilder ref="listViewRef" :options="options" />
     <ExportModal
       v-model="showExportModal"
       :rowCount="$refs.listViewRef?.list?.data?.total_count ?? 0"
@@ -170,6 +156,7 @@ const selectBannerActions = [
 
 const options = computed(() => ({
   doctype: "HD Ticket",
+  titleField: "subject",
   columnConfig: {
     subject: {
       custom: ({ row, item }) => {
@@ -180,7 +167,12 @@ const options = computed(() => ({
           {
             class: ["truncate flex-1", !isSeen && "font-semibold"],
           },
-          item
+          [
+            item,
+            // The bold weight isn't announced; this ends up in the row
+            // link's accessible name ("Subject, Unread").
+            !isSeen && h("span", { class: "sr-only" }, `, ${__("Unread")}`),
+          ]
         );
       },
     },
@@ -190,12 +182,14 @@ const options = computed(() => ({
         const label = isCustomerPortal.value
           ? status?.["label_customer"]
           : status?.["label_agent"];
+        // Hugs its content, so the filter button's hover pill covers the
+        // value only, not the blank rest of the cell.
         return h(
           "div",
-          { class: "flex items-center gap-1.5 justify-start w-full" },
+          { class: "flex min-w-0 items-center gap-1.5 justify-start" },
           [
             h(IndicatorIcon, { class: status?.["parsed_color"] }),
-            h("span", { class: "truncate flex-1 text-base" }, label),
+            h("span", { class: "truncate text-base" }, label),
           ]
         );
       },
@@ -261,11 +255,17 @@ function handleResponseByField(row: any, item: string) {
     {
       text: dayjs(item).format("LLLL"),
     },
-    h(Badge, {
-      label: shortDuration(item),
-      variant: "subtle",
-      theme: "orange",
-    })
+    // data-row-peek: above the row link, so the tooltip opens on hover;
+    // a click still opens the ticket through the row fallback.
+    h(
+      "span",
+      { "data-row-peek": "", class: "relative z-[2] inline-flex" },
+      h(Badge, {
+        label: shortDuration(item),
+        variant: "subtle",
+        theme: "orange",
+      })
+    )
   );
 }
 
@@ -300,11 +300,17 @@ function handleResolutionByField(row: any, item: string) {
     {
       text: dayjs(item).format("LLLL"),
     },
-    h(Badge, {
-      label: shortDuration(item),
-      variant: "subtle",
-      theme: "violet",
-    })
+    // data-row-peek: above the row link, so the tooltip opens on hover;
+    // a click still opens the ticket through the row fallback.
+    h(
+      "span",
+      { "data-row-peek": "", class: "relative z-[2] inline-flex" },
+      h(Badge, {
+        label: shortDuration(item),
+        variant: "subtle",
+        theme: "violet",
+      })
+    )
   );
 }
 
