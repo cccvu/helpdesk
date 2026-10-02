@@ -20,11 +20,7 @@
         </Dropdown>
       </template>
     </LayoutHeader>
-    <ListViewBuilder
-      ref="listViewRef"
-      :options="options"
-      @row-click="(row) => $router.push(`kb/articles/${row}`)"
-    />
+    <ListViewBuilder ref="listViewRef" :options="options" />
     <CategoryModal
       :edit="editTitle"
       v-model="showCategoryModal"

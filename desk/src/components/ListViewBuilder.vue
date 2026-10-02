@@ -19,7 +19,7 @@
         @click="handleViewUpdate"
       />
       <Reload @click="handleReload" :loading="list.loading" />
-      <Filter />
+      <div data-list-filter-trigger class="contents"><Filter /></div>
       <SortBy :hide-label="isMobileView" />
       <ColumnSettings
         :hide-label="isMobileView"
@@ -27,7 +27,7 @@
       />
     </div>
     <div v-else class="flex justify-between items-center w-full">
-      <Filter />
+      <div data-list-filter-trigger class="contents"><Filter /></div>
       <div class="flex items-center gap-2">
         <Reload @click="handleReload" :loading="list.loading" />
         <SortBy :hide-label="isMobileView" />
@@ -43,8 +43,13 @@
     <LoadingIndicator :scale="8" />
   </div>
   <!-- List View -->
+  <!--
+    Rows are not links: the title cell holds the row's one link,
+    stretched over the row; a value that filters is its own button above it.
+  -->
   <ListView
     v-else-if="list.data?.data.length > 0"
+    ref="listViewEl"
     class="flex-1"
     :columns="columns"
     :rows="rows"
@@ -53,35 +58,82 @@
       selectable: options.selectable,
       showTooltip: false,
       resizeColumn: true,
-      getRowRoute: (row) => ({
-        name: options.rowRoute?.name,
-        params: { [options.rowRoute?.prop]: row.name },
-        query: { view: route.query?.view },
-      }),
       emptyState,
     }"
   >
-    <ListHeader class="sm:mx-5 mx-3">
+    <ListViewHeader class="sm:mx-5 mx-3">
       <ListHeaderItem
         v-for="column in columns"
         :key="column.key"
         :item="column"
         @columnWidthUpdated="handleColumnResize"
       />
-    </ListHeader>
+    </ListViewHeader>
     <ListRows
       :rows="rows"
       v-slot="{ idx, column, item, row }"
       :group-by-actions="options.groupByActions"
+      :title-label="(r) => String(r[titleKey] || r.name)"
       @scrollend="handleListScroll"
       class="list-rows"
     >
       <ListRowItem :item="item" :column="column" :row="row">
-        <component
-          :is="listCell(column, row, item, idx)"
-          :key="column.key"
-          @click="(e) => handleFieldClick(e, column, row, item)"
+        <template v-if="cellActionOf(column, item) === 'title'">
+          <RouterLink
+            v-if="options.rowRoute?.name"
+            data-row-link
+            :to="rowRoute(row)"
+            :class="TITLE_LINK_CLASS"
+          >
+            <component :is="listCell(column, row, item, idx)" />
+          </RouterLink>
+          <button
+            v-else
+            type="button"
+            data-row-link
+            :class="TITLE_LINK_CLASS"
+            @click="emit('rowClick', row.name)"
+          >
+            <component :is="listCell(column, row, item, idx)" />
+          </button>
+        </template>
+        <MultipleAvatar
+          v-else-if="
+            cellActionOf(column, item) === 'filter' &&
+            column.type === 'MultipleAvatar'
+          "
+          filterable
+          :avatars="item"
+          :filter-label="__(column.label)"
+          class="min-w-0"
+          @pointerdown.capture="onValuePointerDown"
+          @filter="(name, e) => onValueClick(e, column, row, item, name)"
         />
+        <Tooltip
+          v-else-if="cellActionOf(column, item) === 'filter'"
+          :text="__('Filter by {0}', [__(column.label)])"
+        >
+          <button
+            type="button"
+            data-row-control
+            data-list-filter
+            :class="FILTER_BUTTON_CLASS"
+            @pointerdown="onValuePointerDown"
+            @mousedown.middle.prevent
+            @click="(e) => onValueClick(e, column, row, item)"
+            @auxclick="
+              (e) => e.button === 1 && onValueClick(e, column, row, item)
+            "
+          >
+            <span class="sr-only">
+              {{ __("Filter by {0}:", [__(column.label)]) }}
+            </span>
+            <span data-value class="flex min-w-0 truncate">
+              <component :is="listCell(column, row, item, idx)" />
+            </span>
+          </button>
+        </Tooltip>
+        <component v-else :is="listCell(column, row, item, idx)" />
       </ListRowItem>
     </ListRows>
     <ListSelectBanner v-if="options.showSelectBanner">
@@ -96,7 +148,11 @@
             @click="action.onClick"
           />
           <Dropdown :options="selectBannerOptions(selections, unselectAll)">
-            <Button icon="lucide-more-horizontal" variant="ghost" />
+            <Button
+              icon="lucide-more-horizontal"
+              variant="ghost"
+              :label="__('More actions')"
+            />
           </Dropdown>
         </div>
       </template>
@@ -149,10 +205,11 @@ import {
 } from "@/composables/useView";
 import { useAuthStore } from "@/stores/auth";
 import { globalStore } from "@/stores/globalStore";
+import { useUserStore } from "@/stores/user";
 import { capture } from "@/telemetry";
 import { View, ViewType } from "@/types";
 import { formatTimeShort, getIcon } from "@/utils";
-import { useStorage } from "@vueuse/core";
+import { useMediaQuery, useStorage } from "@vueuse/core";
 import { useTicketStatusStore } from "@/stores/ticketStatus";
 import { __ } from "@/translation";
 import {
@@ -161,18 +218,19 @@ import {
   FeatherIcon,
   frappeRequest,
   ListFooter,
-  ListHeader,
   ListHeaderItem,
   ListRowItem,
   ListSelectBanner,
   ListView,
   LoadingIndicator,
+  Tooltip,
   dayjs,
   toast,
 } from "frappe-ui";
 import {
   computed,
   h,
+  nextTick,
   onMounted,
   onUnmounted,
   provide,
@@ -184,8 +242,16 @@ import {
 import { useRoute, useRouter } from "vue-router";
 
 import EmptyState from "./EmptyState.vue";
+import {
+  cellAction,
+  cellCondition,
+  resolveTitleKey,
+  trimSelections,
+  valueClickIntent,
+} from "./listRowActions.js";
 import { listFilters } from "./listViewFilters";
 import ListRows from "./ListRows.vue";
+import ListViewHeader from "./ListViewHeader.vue";
 
 interface P {
   options: {
@@ -208,6 +274,8 @@ interface P {
     default_page_length?: number;
     isCustomerPortal?: boolean;
     rowRoute?: Record<string, string>;
+    /** Column whose cell holds the row's link; defaults to the first column. */
+    titleField?: string;
   };
 }
 
@@ -219,6 +287,7 @@ const emit = defineEmits<E>();
 const route = useRoute();
 const router = useRouter();
 const { isManager } = useAuthStore();
+const { getUser } = useUserStore();
 const { $dialog, $socket } = globalStore();
 const { getStatus } = useTicketStatusStore();
 
@@ -395,8 +464,19 @@ const list = createResource({
   onSuccess: (data) => {
     list.params = defaultParams;
     columns.value = data.columns;
+    // Bulk actions must never act on rows a filter (or any reload) just hid.
+    const selections = listViewEl.value?.selections;
+    if (selections) {
+      for (const name of trimSelections(selections, data.data || [])) {
+        selections.delete(name);
+      }
+    }
+    restoreFocusAfterReload();
   },
 });
+
+/** frappe-ui ListView: exposes `selections`. */
+const listViewEl = ref(null);
 
 const exposeFunctions = {
   list,
@@ -553,11 +633,17 @@ function listCell(column: any, row: any, item: any, idx: number) {
     });
   }
   if (column.type === "MultipleAvatar") {
-    return h(MultipleAvatar, {
-      avatars: item,
-      hideName: false,
-      class: "flex items-center flex-1 min-w-0",
-    });
+    // data-row-peek: above the row link, so the names' tooltips open on hover;
+    // a click still opens the row (row fallback).
+    return h(
+      "span",
+      { "data-row-peek": "", class: "relative z-[2] flex min-w-0" },
+      h(MultipleAvatar, {
+        avatars: item,
+        hideName: false,
+        class: "flex items-center flex-1 min-w-0",
+      })
+    );
   }
   if (column.type === "Rating") {
     return h(StarRating, {
@@ -571,44 +657,134 @@ function listCell(column: any, row: any, item: any, idx: number) {
   });
 }
 
-function handleFieldClick(e: MouseEvent, column, row, item) {
-  const noFilterFields = ["Data", "Datetime", "Rating", "Int", "Float"];
-  if (noFilterFields.includes(column.type)) {
-    if (options.value.rowRoute?.name !== "") {
-      return;
-    }
-    emit("rowClick", row.name);
+// --- Row link and value filters ---
+
+const TITLE_LINK_CLASS =
+  "min-w-0 truncate text-start after:absolute after:inset-0 after:z-[1] after:rounded after:content-[''] after:ring-inset after:ring-outline-gray-5 focus-visible:outline-none focus-visible:after:ring-2";
+const FILTER_BUTTON_CLASS =
+  "relative z-[2] inline-flex min-w-0 max-w-full items-center rounded px-1 text-start hover:bg-surface-gray-3 hover:text-ink-gray-9 active:bg-surface-gray-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-outline-gray-5";
+const CELL_FILTER_TOAST = "list-cell-filter";
+
+const titleKey = computed(() =>
+  resolveTitleKey(columns.value, options.value.titleField)
+);
+// Values filter only where a pointer can hover; a tap anywhere opens the row.
+const inlineFilters = useMediaQuery("(hover: hover) and (pointer: fine)");
+
+function cellActionOf(column, item) {
+  return cellAction(column, item, {
+    titleKey: titleKey.value,
+    inlineFilters: inlineFilters.value,
+  });
+}
+
+function rowRoute(row) {
+  return {
+    name: options.value.rowRoute?.name,
+    params: { [options.value.rowRoute?.prop]: row.name },
+    query: { view: route.query?.view },
+  };
+}
+
+/** The value button's last pointerdown: a click's own pointerType is unreliable. */
+let lastPointerType = "";
+function onValuePointerDown(e: PointerEvent) {
+  lastPointerType = e.pointerType;
+}
+
+/**
+ * A click on a value button (or an assignee avatar, with `assignee` its
+ * name): filters on a plain click, opens the row in a new tab on Ctrl/Cmd or
+ * middle click, and opens it on a touch tap.
+ */
+function onValueClick(e: MouseEvent, column, row, item, assignee?: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  const intent = valueClickIntent(e, lastPointerType);
+  lastPointerType = "";
+  const button = e.currentTarget as HTMLElement | null;
+  const link = button
+    ?.closest("[data-list-row]")
+    ?.querySelector<HTMLElement>("[data-row-link]");
+  if (intent === "open") {
+    link?.click();
     return;
   }
-  e.stopPropagation();
-  e.preventDefault();
+  if (intent === "new-tab") {
+    if (link instanceof HTMLAnchorElement) {
+      window.open(link.href, "_blank", "noopener");
+    }
+    return;
+  }
+  if (intent !== "filter") return;
 
   if (column.label == "Status" && options.value.doctype === "HD Ticket") {
     item = getStatus(item)?.label_agent;
   }
-
-  if (column.type === "MultipleAvatar") {
-    if (item.length > 1) {
-      let target = e.target as HTMLElement;
-      target = target.closest(".user-avatar");
-      if (target) {
-        item = target.getAttribute("data-name");
-      }
-    } else {
-      item = item[0].name;
-    }
-    applyColumnFilter(column.key, "LIKE", `%${item}%`);
-    return;
-  }
-  applyColumnFilter(column.key, "=", item);
+  const condition = cellCondition(column, item, { assignee });
+  if (!condition) return;
+  const text =
+    column.type === "MultipleAvatar"
+      ? getUser(assignee)?.full_name || assignee
+      : button?.querySelector("[data-value]")?.textContent?.trim() ||
+        String(condition[2]);
+  applyCellFilter(condition, __(column.label), text, button);
 }
 
-function applyColumnFilter(key: string, operator: string, value: any) {
-  const conditions = normalizeFilters(defaultParams.filters).filter(
-    (condition) => condition[0] !== key
-  );
-  conditions.push([key, operator, value]);
-  applyFilters(conditions);
+/** Set while a keyboard-activated filter reloads, to keep focus in the list. */
+let focusAfterReload: HTMLElement | null = null;
+
+/**
+ * Applies one cell's filter in place of any on the same field, and offers to
+ * undo it: on a default view the change is saved at once.
+ */
+function applyCellFilter(
+  condition: [string, string, unknown],
+  label: string,
+  text: string,
+  button: HTMLElement | null
+) {
+  const previous = normalizeFilters(defaultParams.filters);
+  const previousViewUpdated = isViewUpdated.value;
+  const next = [
+    ...previous.filter(([field]) => field !== condition[0]),
+    condition,
+  ];
+  focusAfterReload = button;
+  applyFilters(next, "cell");
+  const applied = JSON.stringify(normalizeFilters(defaultParams.filters));
+
+  toast(() => h("span", __("Filtered by {0}: {1}", [label, text])), {
+    id: CELL_FILTER_TOAST,
+    duration: 8000,
+    action: {
+      label: __("Undo"),
+      onClick: () => {
+        // Only the change this toast offered to undo.
+        const current = normalizeFilters(defaultParams.filters);
+        if (JSON.stringify(current) !== applied) return;
+        applyFilters(previous, "undo");
+        isViewUpdated.value = previousViewUpdated;
+      },
+    },
+  });
+}
+
+/**
+ * After a filter reload, focus stays on the same value button: rows are
+ * keyed, so it survives when its row does. When its row is gone, focus moves
+ * to the Filter button rather than falling back to the page.
+ */
+function restoreFocusAfterReload() {
+  const button = focusAfterReload;
+  focusAfterReload = null;
+  if (!button || document.activeElement !== button) return;
+  nextTick(() => {
+    if (button.isConnected) return;
+    document
+      .querySelector<HTMLElement>("[data-list-filter-trigger] button")
+      ?.focus();
+  });
 }
 
 const showViewControls = computed(() => {
@@ -642,9 +818,17 @@ listFilters.value = {
   current: () => normalizeFilters(list?.params?.filters),
   apply: applyFilters,
 };
-onUnmounted(() => (listFilters.value = null));
+onUnmounted(() => {
+  listFilters.value = null;
+  toast.dismiss(CELL_FILTER_TOAST);
+});
 
-function applyFilters(filters) {
+/**
+ * `source` marks the cell filter and its Undo; any other change ends the
+ * chance to undo a cell filter.
+ */
+function applyFilters(filters, source?: "cell" | "undo") {
+  if (source !== "cell" && source !== "undo") toast.dismiss(CELL_FILTER_TOAST);
   isViewUpdated.value = true;
   defaultParams.filters = normalizeFilters(filters);
   list.submit({ ...defaultParams });
@@ -771,6 +955,7 @@ function handleReload() {
 }
 
 function handleViewChanges() {
+  toast.dismiss(CELL_FILTER_TOAST);
   if (!switchToView(route.query.view as string)) return;
   applyUrlFilters();
   list.submit({ ...defaultParams });
@@ -850,6 +1035,7 @@ function findCurrentView() {
 watch(
   [() => route.query.view as string, () => route.query.filters as string],
   ([view], [previousView]) => {
+    toast.dismiss(CELL_FILTER_TOAST);
     if (view !== previousView && !switchToView(view)) return;
     applyUrlFilters();
     list.submit({ ...defaultParams });

@@ -22,7 +22,7 @@
             </div>
           </div>
           <Dropdown :options="actions(group)" v-if="groupByActions.length > 0">
-            <Button variant="ghost">
+            <Button variant="ghost" :label="__('More actions')">
               <template #icon>
                 <IconMoreHorizontal class="h-4 w-4" />
               </template>
@@ -31,28 +31,30 @@
         </div>
       </ListGroupHeader>
       <ListGroupRows :group="group" id="list-rows" class="!mt-0">
-        <ListRow
+        <ListViewRow
           v-for="row in group.rows"
           :key="row.name"
           v-slot="{ idx, column, item }"
           :row="row"
+          :title-label="titleLabel(row)"
           class="truncate text-base row"
         >
           <slot v-bind="{ idx, column, item, row }" />
-        </ListRow>
+        </ListViewRow>
       </ListGroupRows>
     </div>
   </div>
   <ListRows class="mx-3 sm:mx-5" v-else id="list-rows">
-    <ListRow
+    <ListViewRow
       v-for="row in groupedRows"
       :key="row.name"
       v-slot="{ idx, column, item }"
       :row="row"
+      :title-label="titleLabel(row)"
       class="truncate text-base"
     >
       <slot v-bind="{ idx, column, item, row }" />
-    </ListRow>
+    </ListViewRow>
   </ListRows>
 </template>
 
@@ -62,12 +64,12 @@ import {
   Dropdown,
   ListGroupHeader,
   ListGroupRows,
-  ListRow,
   ListRows,
 } from "frappe-ui";
 import { computed, ref, watch } from "vue";
 
 import IconMoreHorizontal from "~icons/lucide/more-horizontal";
+import ListViewRow from "./ListViewRow.vue";
 const props = defineProps({
   rows: {
     type: Array,
@@ -76,6 +78,11 @@ const props = defineProps({
   groupByActions: {
     type: Array,
     default: () => [],
+  },
+  /** (row) => string: names the row's checkbox, "Select {title}". */
+  titleLabel: {
+    type: Function,
+    default: (row) => row.name,
   },
 });
 
