@@ -700,7 +700,9 @@ function onValuePointerDown(e: PointerEvent) {
 function onValueClick(e: MouseEvent, column, row, item, assignee?: string) {
   e.preventDefault();
   e.stopPropagation();
-  const intent = valueClickIntent(e, lastPointerType);
+  // A keyboard-activated click (detail 0) had no pointer: a stale pointerdown,
+  // such as a touch scroll that started on a value, must not decide it.
+  const intent = valueClickIntent(e, e.detail === 0 ? "" : lastPointerType);
   lastPointerType = "";
   const button = e.currentTarget as HTMLElement | null;
   const link = button
@@ -731,7 +733,10 @@ function onValueClick(e: MouseEvent, column, row, item, assignee?: string) {
   applyCellFilter(condition, __(column.label), text, button);
 }
 
-/** Set while a keyboard-activated filter reloads, to keep focus in the list. */
+/**
+ * The clicked value button, set while its filter reloads: if it still has
+ * focus (as after a keyboard activation), focus stays in the list.
+ */
 let focusAfterReload: HTMLElement | null = null;
 
 /**
@@ -745,6 +750,9 @@ function applyCellFilter(
   button: HTMLElement | null
 ) {
   const previous = normalizeFilters(defaultParams.filters);
+  // Already filtered by exactly this (or a double-click's second click).
+  const wanted = JSON.stringify(condition);
+  if (previous.some((c) => JSON.stringify(c) === wanted)) return;
   const previousViewUpdated = isViewUpdated.value;
   const next = [
     ...previous.filter(([field]) => field !== condition[0]),

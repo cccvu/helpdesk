@@ -1,6 +1,6 @@
 <template>
   <!--
-    The row is not a link (contract C1). Its title cell holds the row's one
+    The row element is not a link itself. Its title cell holds the row's one
     link ([data-row-link]); that link's ::after stretches over the whole row
     (z-[1]), so the row surface is a real link. Controls ([data-row-control])
     and hover-only info ([data-row-peek]) sit above it (relative z-[2]).
@@ -209,6 +209,13 @@ const handleCheckboxClick = (event: MouseEvent) => {
       (k) => lastSelected === k[list.value.rowKey]
     );
     const curIndex = rows.findIndex((k) => value === k[list.value.rowKey]);
+
+    // No anchor among these rows (nothing selected yet, or the last selected
+    // row is gone): a plain toggle, which also matches the input's own flip.
+    if (lastIndex < 0 || curIndex < 0) {
+      list.value.toggleRow(value);
+      return;
+    }
 
     const start = Math.min(lastIndex, curIndex);
     const end = Math.max(lastIndex, curIndex);
