@@ -60,7 +60,7 @@
         <div
           class="break-words text-base text-ink-gray-8 flex items-center gap-2"
         >
-          <Tooltip :text="dateFormat(data.value, dateTooltipFormat)">
+          <Tooltip :text="dateFormat(data.value, slaTooltipFormat)">
             <span class="truncate text-base" :class="data.textColor">
               {{ __(data.label) }}
             </span>
@@ -68,7 +68,7 @@
           <!-- SLA explanation icon -->
           <Tooltip
             v-if="
-              dayjs(data.value).diff(dayjs(), 'day', true) > 4 &&
+              dayjsLocal(data.value).diff(dayjsLocal(), 'day', true) > 4 &&
               data.title === 'Resolution'
             "
             :text="
@@ -128,8 +128,8 @@ import {
 } from "@/composables/useSLA";
 import { ITicket } from "@/pages/ticket/symbols";
 import { Field } from "@/types";
-import { dateFormat, dateTooltipFormat } from "@/utils";
-import { Avatar, dayjs, Tooltip } from "frappe-ui";
+import { dateFormat, dateTooltipFormat, slaTooltipFormat } from "@/utils";
+import { Avatar, dayjs, dayjsLocal, Tooltip } from "frappe-ui";
 import { computed, inject } from "vue";
 
 const emit = defineEmits(["open"]);

@@ -144,6 +144,7 @@ function cardDetails(card: SLACard) {
 function fmt(date: string): string {
   // Year included: SLA breaches span months/years, so a bare "MMM D" makes the
   // due/actual dates read as contradictory (e.g. resolved "before" the due date).
-  return dateFormat(date, "MMM D, YYYY, h:mm A");
+  // Zone included: the agent's profile zone may not be the one they work in.
+  return dateFormat(date, "MMM D, YYYY, h:mm A z");
 }
 </script>
