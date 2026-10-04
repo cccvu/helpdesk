@@ -58,6 +58,7 @@
       selectable: options.selectable,
       showTooltip: false,
       resizeColumn: true,
+      rowHeight: '2.5rem',
       emptyState,
     }"
   >

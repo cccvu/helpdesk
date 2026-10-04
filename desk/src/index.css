@@ -1,5 +1,6 @@
 @import "frappe-ui/style.css";
 @import "frappe-ui/editor-style.css";
+@import "@fontsource-variable/atkinson-hyperlegible-next";
 
 @tailwind base;
 @tailwind components;
@@ -175,4 +176,66 @@ body {
   100% {
     --fade-bottom: 0px;
   }
+}
+
+/* Appearance preferences (Settings > Preferences > Appearance).
+   Opt-in: each rule needs an attribute that is absent at its default, so the
+   default look is unchanged. */
+:root[data-text-size="s"] {
+  font-size: 92.857%;
+}
+:root[data-text-size="l"] {
+  font-size: 114.286%;
+}
+:root[data-text-size="xl"] {
+  font-size: 128.571%;
+}
+:root[data-text-size="xxl"] {
+  font-size: 142.857%;
+}
+
+:root[data-font="atkinson"] {
+  font-family: "Atkinson Hyperlegible Next Variable", ui-sans-serif, system-ui,
+    sans-serif;
+}
+:root[data-font="system"] {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui,
+    sans-serif;
+}
+/* frappe-ui pins Inter's 'opsz' 24 on these elements. */
+:root[data-font="system"] :is(body, button, p, span, div) {
+  font-variation-settings: normal;
+}
+
+:root[data-contrast="more"]:not([data-theme="dark"]) {
+  --ink-gray-5: var(--gray-700);
+  --outline-gray-4: var(--gray-600);
+  --outline-gray-5: var(--gray-700);
+  --ink-amber-8: var(--amber-800);
+  --ink-blue-8: var(--blue-800);
+}
+:root[data-contrast="more"][data-theme="dark"] {
+  --ink-gray-5: var(--dark-gray-200);
+  --ink-gray-6: var(--dark-gray-200);
+  --outline-gray-4: var(--dark-gray-400);
+  --outline-gray-5: var(--dark-gray-300);
+}
+:root[data-contrast="more"] {
+  --focus-outline-default: 2px solid var(--outline-gray-5);
+  --focus-outline-red: var(--focus-outline-default);
+  --focus-outline-green: var(--focus-outline-default);
+  --focus-outline-amber: var(--focus-outline-default);
+  --focus-outline-blue: var(--focus-outline-default);
+  --focus-outline-violet: var(--focus-outline-default);
+}
+/* @tailwindcss/forms hides the outline on focused inputs, and SidebarItem
+   sets focus:outline-none; tokens can't reach either. */
+:root[data-contrast="more"] :is(input, textarea, select):focus-visible,
+:root[data-contrast="more"] [data-slot="sidebar-item"] :focus-visible {
+  outline: var(--focus-outline-default);
+  outline-offset: 0;
+}
+/* TabButtons clips outer outlines. */
+:root[data-contrast="more"] [data-slot="tab-button"]:focus-visible {
+  outline-offset: -2px;
 }

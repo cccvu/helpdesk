@@ -7,6 +7,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAppearanceStore } from "@/stores/appearance";
 import { dataTheme, getFontFamily, stripEmailColors } from "@/utils";
 import { computed, ref, watch } from "vue";
 
@@ -17,6 +18,7 @@ const props = defineProps({
   },
 });
 
+const appearance = useAppearanceStore();
 const iframeRef = ref<HTMLIFrameElement | null>(null);
 const _content = ref(stripEmailColors(props.content));
 
@@ -214,11 +216,12 @@ watch(iframeRef, (iframe) => {
       const parent = emailContent.closest("html");
       if (!parent) return;
       parent.setAttribute("data-theme", dataTheme.value);
+      appearance.applyAttributes(parent);
 
       const font = getFontFamily(_content.value);
       if (font) emailContent.classList.add(font);
 
-      iframe.style.height = parent.offsetHeight + 1 + "px";
+      fitHeight(iframe);
 
       // Clicks inside the iframe don't bubble to the parent document, popovers/dropdowns that close on outside-click never fire.
       iframe.contentDocument?.addEventListener("pointerdown", () => {
@@ -258,4 +261,28 @@ watch(dataTheme, (theme) => {
   const html = iframeRef.value?.contentDocument?.documentElement;
   if (html) html.setAttribute("data-theme", theme);
 });
+
+// Text size and font change the content's height.
+watch(
+  () => appearance.htmlAttributes,
+  () => {
+    const iframe = iframeRef.value;
+    const html = iframe?.contentDocument?.documentElement;
+    if (!iframe || !html) return;
+    appearance.applyAttributes(html);
+    fitHeight(iframe);
+  }
+);
+
+// Measuring lays the content out, which starts loading any font it now uses
+// (a font chosen in Appearance loads on first use); measure again once loaded.
+function fitHeight(iframe: HTMLIFrameElement) {
+  const doc = iframe.contentDocument;
+  if (!doc) return;
+  const fit = () => {
+    iframe.style.height = doc.documentElement.offsetHeight + 1 + "px";
+  };
+  fit();
+  doc.fonts?.ready.then(fit);
+}
 </script>

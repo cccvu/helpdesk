@@ -10,6 +10,19 @@ index b8d1d2b..56d6e3c 100644
                </div>
  
                <MultiSelectResults
+diff --git a/node_modules/frappe-ui/src/components/Switch/Switch.vue b/node_modules/frappe-ui/src/components/Switch/Switch.vue
+index 6a06f66..1584e30 100644
+--- a/node_modules/frappe-ui/src/components/Switch/Switch.vue
++++ b/node_modules/frappe-ui/src/components/Switch/Switch.vue
+@@ -125,7 +125,7 @@ const switchClasses = computed(() => {
+     model.value
+       ? 'bg-surface-gray-10 enabled:hover:bg-surface-gray-9 active:bg-surface-gray-8 group-hover:enabled:bg-surface-gray-9'
+       : 'bg-surface-gray-4 enabled:hover:bg-gray-400 active:bg-gray-500 group-hover:enabled:bg-gray-400',
+-    props.size === 'md' ? 'h-5 w-8 border-[3px]' : 'h-4 w-[26px] border-2',
++    props.size === 'md' ? 'h-5 w-8 border-[3px]' : 'h-4 w-[1.625rem] border-2',
+   ]
+ })
+ 
 diff --git a/node_modules/frappe-ui/src/molecules/editor/SuggestionExtension.ts b/node_modules/frappe-ui/src/molecules/editor/SuggestionExtension.ts
 index 0b7069a..de2a3df 100644
 --- a/node_modules/frappe-ui/src/molecules/editor/SuggestionExtension.ts
@@ -117,3 +130,51 @@ index 8363502..07f4551 100644
      },
  
      onKeyDown(props: SuggestionKeyDownProps): boolean {
+diff --git a/node_modules/frappe-ui/tailwind/plugin.js b/node_modules/frappe-ui/tailwind/plugin.js
+index 375cdb5..40c0eb2 100644
+--- a/node_modules/frappe-ui/tailwind/plugin.js
++++ b/node_modules/frappe-ui/tailwind/plugin.js
+@@ -71,12 +71,15 @@ function mergeVariableLayers(...layers) {
+ // (Component classes are JIT-purged, so only the ones used in content emit.)
+ const WEIGHT_VARIANTS = ['medium', 'semibold', 'bold', 'black']
+ 
++// rem so type follows the root font size (16px root: 14px -> 0.875rem).
++const toRem = (v) => (/^\d+(\.\d+)?px$/.test(v) ? `${parseFloat(v) / 16}rem` : v)
++
+ function buildFontSize() {
+   const out = {}
+   // Each size's regular variant already carries lineHeight, letterSpacing and
+   // fontWeight from the text-styles export (see figma-tokens-to-theme.js).
+   for (const [key, [size, meta]] of Object.entries(typographyTokens.fontSize)) {
+-    out[key] = [size, { ...meta }]
++    out[key] = [toRem(size), { ...meta }]
+   }
+   // Paragraph variants (`text-p-<size>`): same size, the paragraph style's
+   // looser line-height and its own letter-spacing.
+@@ -136,7 +139,7 @@ function buildTextStyleUtilities() {
+       for (const weight of WEIGHT_VARIANTS) {
+         if (!(weight in byWeight)) continue
+         out[group.className(size, weight)] = {
+-          fontSize,
++          fontSize: toRem(fontSize),
+           lineHeight,
+           fontWeight: String(t.fontWeight[weight]),
+           letterSpacing: byWeight[weight],
+@@ -384,7 +387,7 @@ export default plugin(
+           },
+           sm: {
+             css: {
+-              fontSize: '14px',
++              fontSize: '0.875rem',
+               fontWeight: 420,
+               lineHeight: 1.5,
+               letterSpacing: '0.02em',
+@@ -452,7 +455,7 @@ export default plugin(
+           v3: {
+             css: [
+               {
+-                fontSize: 'var(--prose-font-size, 15px)',
++                fontSize: 'var(--prose-font-size, 0.9375rem)',
+                 fontWeight: 420,
+                 lineHeight: '1.7',
+                 letterSpacing: '0.02em',

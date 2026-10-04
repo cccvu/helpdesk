@@ -1,5 +1,5 @@
 <template>
-  <TransitionRoot :show="sidebarOpened">
+  <TransitionRoot :show="sidebarOpened" @after-leave="onDrawerClosed">
     <Dialog as="div" @close="sidebarOpened = false" class="fixed inset-0">
       <TransitionChild
         as="template"
@@ -39,6 +39,7 @@ import {
 import { computed, h, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import { useAppearanceStore } from "@/stores/appearance";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
 import { isCustomerPortal } from "@/utils";
@@ -58,6 +59,7 @@ const { appsMenuOption } = useApps();
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const appearance = useAppearanceStore();
 
 const agentStatusStore = useAgentStatusStore();
 
@@ -97,6 +99,28 @@ const themeMenuItem = computed(() => ({
 
 const configStore = useConfigStore();
 
+// Open the Appearance dialog once the drawer has closed, and return focus to
+// the button that opened the drawer when the dialog closes.
+let appearancePending = false;
+let drawerOpener: HTMLElement | null = null;
+watch(sidebarOpened, (open) => {
+  if (open) drawerOpener = document.activeElement as HTMLElement | null;
+});
+const appearanceMenuOption = {
+  label: __("Appearance"),
+  icon: "lucide-palette",
+  onClick: () => {
+    appearancePending = true;
+    sidebarOpened.value = false;
+  },
+};
+
+function onDrawerClosed() {
+  if (!appearancePending) return;
+  appearancePending = false;
+  appearance.openDialog(drawerOpener);
+}
+
 // Offers the source of the running app (AGPL), from its pyproject.toml.
 const sourceCodeMenuOptions = window.source_url
   ? [
@@ -109,6 +133,7 @@ const sourceCodeMenuOptions = window.source_url
   : [];
 
 const customerPortalDropdown = computed(() => [
+  appearanceMenuOption,
   ...sourceCodeMenuOptions,
   {
     label: __("Log out"),
@@ -120,6 +145,7 @@ const customerPortalDropdown = computed(() => [
 const agentPortalDropdown = computed(() => [
   appsMenuOption.value,
   ...(authStore.hasAgentRecord ? [availabilityMenuOption.value] : []),
+  appearanceMenuOption,
   {
     label: __("Customer portal"),
     icon: "lucide-users",

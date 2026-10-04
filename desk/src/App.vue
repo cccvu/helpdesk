@@ -3,15 +3,17 @@
     <router-view />
   </FrappeUIProvider>
   <Dialogs />
+  <AppearanceDialog v-if="appearance.dialogRequested" />
 </template>
 
 <script setup lang="ts">
 import { Dialogs } from "@/components/dialogs";
+import { useAppearanceStore } from "@/stores/appearance";
 import { useConfigStore } from "@/stores/config";
 import { useFavicon } from "@vueuse/core";
 import { FrappeUIProvider, setConfig, toast, useTheme } from "frappe-ui";
 import { storeToRefs } from "pinia";
-import { h, onMounted } from "vue";
+import { defineAsyncComponent, h, onMounted } from "vue";
 import Wifi from "~icons/lucide/wifi";
 import WifiOff from "~icons/lucide/wifi-off";
 import { __ } from "./translation";
@@ -26,6 +28,11 @@ if (!localStorage.getItem("theme")) {
   localStorage.setItem("theme", "light");
 }
 useTheme();
+const appearance = useAppearanceStore();
+
+const AppearanceDialog = defineAsyncComponent(
+  () => import("@/components/AppearanceDialog.vue")
+);
 
 onMounted(() => {
   window.addEventListener("online", () => {
