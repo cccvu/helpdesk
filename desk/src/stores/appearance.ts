@@ -57,7 +57,9 @@ export const useAppearanceStore = defineStore("appearance", () => {
 
   // The Appearance dialog has no trigger element, so focus would land on
   // <body> when it closes. Remember where focus was and return it there.
+  // dialogRequested mounts it on first use, so its chunks aren't loaded before.
   const dialogOpen = ref(false);
+  const dialogRequested = ref(false);
   let returnFocusTo: HTMLElement | null = null;
 
   function openDialog(returnTo?: HTMLElement | null) {
@@ -67,6 +69,7 @@ export const useAppearanceStore = defineStore("appearance", () => {
         '[aria-haspopup="menu"][aria-expanded="true"]'
       ) ??
       (document.activeElement as HTMLElement | null);
+    dialogRequested.value = true;
     dialogOpen.value = true;
   }
 
@@ -82,6 +85,7 @@ export const useAppearanceStore = defineStore("appearance", () => {
   return {
     applyAttributes,
     dialogOpen,
+    dialogRequested,
     font,
     htmlAttributes,
     increaseContrast,

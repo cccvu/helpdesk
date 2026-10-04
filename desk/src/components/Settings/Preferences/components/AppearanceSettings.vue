@@ -90,7 +90,7 @@
           </span>
         </template>
       </Switch>
-      <div class="flex items-center justify-between gap-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
         <Button
           variant="subtle"
           :label="__('Reset to defaults')"

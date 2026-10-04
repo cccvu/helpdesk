@@ -221,7 +221,7 @@ watch(iframeRef, (iframe) => {
       const font = getFontFamily(_content.value);
       if (font) emailContent.classList.add(font);
 
-      iframe.style.height = parent.offsetHeight + 1 + "px";
+      fitHeight(iframe);
 
       // Clicks inside the iframe don't bubble to the parent document, popovers/dropdowns that close on outside-click never fire.
       iframe.contentDocument?.addEventListener("pointerdown", () => {
@@ -270,7 +270,19 @@ watch(
     const html = iframe?.contentDocument?.documentElement;
     if (!iframe || !html) return;
     appearance.applyAttributes(html);
-    iframe.style.height = html.offsetHeight + 1 + "px";
+    fitHeight(iframe);
   }
 );
+
+// Measuring lays the content out, which starts loading any font it now uses
+// (a font chosen in Appearance loads on first use); measure again once loaded.
+function fitHeight(iframe: HTMLIFrameElement) {
+  const doc = iframe.contentDocument;
+  if (!doc) return;
+  const fit = () => {
+    iframe.style.height = doc.documentElement.offsetHeight + 1 + "px";
+  };
+  fit();
+  doc.fonts?.ready.then(fit);
+}
 </script>

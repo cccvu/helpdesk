@@ -178,7 +178,7 @@ body {
   }
 }
 
-/* Appearance preferences (Settings > Preferences > Appearance; issue 175).
+/* Appearance preferences (Settings > Preferences > Appearance).
    Opt-in: each rule needs an attribute that is absent at its default, so the
    default look is unchanged. */
 :root[data-text-size="s"] {

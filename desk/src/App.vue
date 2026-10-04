@@ -3,7 +3,7 @@
     <router-view />
   </FrappeUIProvider>
   <Dialogs />
-  <AppearanceDialog />
+  <AppearanceDialog v-if="appearance.dialogRequested" />
 </template>
 
 <script setup lang="ts">
@@ -28,7 +28,7 @@ if (!localStorage.getItem("theme")) {
   localStorage.setItem("theme", "light");
 }
 useTheme();
-useAppearanceStore();
+const appearance = useAppearanceStore();
 
 const AppearanceDialog = defineAsyncComponent(
   () => import("@/components/AppearanceDialog.vue")
