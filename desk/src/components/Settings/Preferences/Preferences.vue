@@ -22,13 +22,10 @@
     <template #content>
       <div class="flex flex-col">
         <div>
-          <div class="text-base-semibold text-ink-gray-9">
+          <h2 class="text-base-semibold text-ink-gray-9">
             {{ __("Appearance") }}
-          </div>
-          <ThemeSwitcher
-            :name="config.brandName || 'Helpdesk'"
-            :logo="config.brandLogo || HDLogo"
-          />
+          </h2>
+          <AppearanceSettings class="mt-6" />
         </div>
         <hr class="my-8" />
         <div>
@@ -49,15 +46,12 @@ import { computed, watch } from "vue";
 import { Button, createDocumentResource, toast } from "frappe-ui";
 import SettingsLayoutBase from "@/components/layouts/SettingsLayoutBase.vue";
 import UnsavedBadge from "@/components/UnsavedBadge.vue";
-import HDLogo from "@/assets/logos/HDLogo.vue";
 import { __ } from "@/translation";
 import { useAuthStore } from "@/stores/auth";
-import { useConfigStore } from "@/stores/config";
 import { disableSettingModalOutsideClick } from "../settingsModal";
-import ThemeSwitcher from "./components/ThemeSwitcher.vue";
+import AppearanceSettings from "./components/AppearanceSettings.vue";
 import LanguageTimezoneSetting from "./components/LanguageTimezoneSetting.vue";
 
-const config = useConfigStore();
 const { userId } = useAuthStore();
 const user = createDocumentResource({ doctype: "User", name: userId });
 

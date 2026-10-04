@@ -71,6 +71,7 @@ import {
   showCommentBox,
   showEmailBox,
 } from "@/pages/ticket/modalStates";
+import { useAppearanceStore } from "@/stores/appearance";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
 import { capture } from "@/telemetry";
@@ -115,6 +116,7 @@ import {
 const { isMobileView } = useScreenSize();
 
 const router = useRouter();
+const appearance = useAppearanceStore();
 const authStore = useAuthStore();
 const configStore = useConfigStore();
 
@@ -138,6 +140,11 @@ const sourceCodeMenuOption = {
 };
 
 const customerPortalDropdown = computed(() => [
+  {
+    label: __("Appearance"),
+    icon: "lucide-palette",
+    onClick: () => appearance.openDialog(),
+  },
   sourceCodeMenuOption,
   {
     group: __("Danger"),

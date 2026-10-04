@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col gap-4 mt-6">
+  <div class="flex flex-col gap-4">
     <div class="flex flex-col gap-1">
       <slot name="title">
         <span :id="titleId" class="text-base-medium text-ink-gray-8">{{
