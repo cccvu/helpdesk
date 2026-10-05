@@ -770,8 +770,15 @@ async function applyCellFilter(
     condition,
   ];
   const pushed = JSON.stringify(next);
-  cellFilterPushed = pushed;
   focusAfterReload = button;
+  if (pushed === route.query.filters) {
+    // The URL already holds it, but a named view's popover edit moved the list
+    // off it in place, and the router refuses a duplicate navigation.
+    applyUrlFilters();
+    list.submit({ ...defaultParams });
+    return;
+  }
+  cellFilterPushed = pushed;
   // The route watch applies the URL's filters and reloads the list.
   const failure = await router.push({
     query: { ...route.query, filters: pushed },
