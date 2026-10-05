@@ -15,8 +15,10 @@
     >
       <Button
         :label="__('Save Changes')"
-        v-if="isViewUpdated && canSaveView"
-        @click="handleViewUpdate"
+        v-if="
+          viewReady && (isViewUpdated || route.query.filters) && canSaveView
+        "
+        @click="saveChanges"
       />
       <Reload @click="handleReload" :loading="list.loading" />
       <div data-list-filter-trigger class="contents"><Filter /></div>
@@ -451,6 +453,8 @@ const emptyState = computed(() => {
 });
 
 const isViewUpdated = ref(false);
+/** The saved view has been applied: saving before then would save empties. */
+const viewReady = ref(false);
 
 const list = createResource({
   url: "helpdesk.api.doc.get_list_data",
@@ -740,11 +744,18 @@ function onValueClick(e: MouseEvent, column, row, item, assignee?: string) {
  */
 let focusAfterReload: HTMLElement | null = null;
 
+/** The list's own route: a navigation that lands elsewhere isn't a filter. */
+const listRouteName = route.name;
+/** The `?filters` the last cell filter navigated to. */
+let cellFilterPushed: string | null = null;
+
 /**
- * Applies one cell's filter in place of any on the same field, and offers to
- * undo it: on a default view the change is saved at once.
+ * Applies one cell's filter in place of any on the same field, as navigation:
+ * it goes into the URL (`?filters`), so Back undoes it and a reload keeps it.
+ * Nothing is saved; Save Changes does that on purpose. The toast's Undo is
+ * Back.
  */
-function applyCellFilter(
+async function applyCellFilter(
   condition: [string, string, unknown],
   label: string,
   text: string,
@@ -754,14 +765,23 @@ function applyCellFilter(
   // Already filtered by exactly this (or a double-click's second click).
   const wanted = JSON.stringify(condition);
   if (previous.some((c) => JSON.stringify(c) === wanted)) return;
-  const previousViewUpdated = isViewUpdated.value;
   const next = [
     ...previous.filter(([field]) => field !== condition[0]),
     condition,
   ];
+  const pushed = JSON.stringify(next);
+  cellFilterPushed = pushed;
   focusAfterReload = button;
-  applyFilters(next, "cell");
-  const applied = JSON.stringify(normalizeFilters(defaultParams.filters));
+  // The route watch applies the URL's filters and reloads the list.
+  const failure = await router.push({
+    query: { ...route.query, filters: pushed },
+  });
+  const ours = () =>
+    route.name === listRouteName && route.query.filters === pushed;
+  if (failure || !ours()) {
+    focusAfterReload = null;
+    return;
+  }
 
   toast(() => h("span", __("Filtered by {0}: {1}", [label, text])), {
     id: CELL_FILTER_TOAST,
@@ -770,10 +790,7 @@ function applyCellFilter(
       label: __("Undo"),
       onClick: () => {
         // Only the change this toast offered to undo.
-        const current = normalizeFilters(defaultParams.filters);
-        if (JSON.stringify(current) !== applied) return;
-        applyFilters(previous, "undo");
-        isViewUpdated.value = previousViewUpdated;
+        if (ours()) router.back();
       },
     },
   });
@@ -833,19 +850,30 @@ onUnmounted(() => {
 });
 
 /**
- * `source` marks the cell filter and its Undo; any other change ends the
- * chance to undo a cell filter.
+ * The filter popover, quick filters and the command palette. Any of them ends
+ * the chance to undo a cell filter. On a default view the change is saved at
+ * once, with everything the list shows: a cell filter in the URL is saved too,
+ * so it leaves the URL.
  */
-function applyFilters(filters, source?: "cell" | "undo") {
-  if (source !== "cell" && source !== "undo") toast.dismiss(CELL_FILTER_TOAST);
+function applyFilters(filters) {
+  toast.dismiss(CELL_FILTER_TOAST);
   isViewUpdated.value = true;
   defaultParams.filters = normalizeFilters(filters);
-  list.submit({ ...defaultParams });
 
   // automatically update filters for default view
-  if (!defaultParams.is_default) return;
-  handleViewUpdate();
+  if (!defaultParams.is_default) {
+    list.submit({ ...defaultParams });
+    return;
+  }
+  handleViewUpdate(defaultParams.filters);
+  viewFilters = defaultParams.filters;
   isViewUpdated.value = false;
+  if (route.query.filters == null) {
+    list.submit({ ...defaultParams });
+  } else {
+    // the route watch reloads the list
+    router.replace({ query: { ...route.query, filters: undefined } });
+  }
 }
 
 function applySort(order_by: string) {
@@ -853,7 +881,8 @@ function applySort(order_by: string) {
   defaultParams.order_by = order_by;
   list.submit({ ...defaultParams, order_by });
   if (!defaultParams.is_default) return;
-  handleViewUpdate();
+  // The view's own filters: a cell filter is saved only by Save Changes.
+  handleViewUpdate(viewFilters);
   isViewUpdated.value = false;
 }
 
@@ -901,9 +930,14 @@ function handlePageLength(count: number, loadMore: boolean = false) {
   list.reload();
 }
 
-function handleViewUpdate() {
+/** Saves `filters` with the list's sort, columns and rows to the current view. */
+function handleViewUpdate(filters, onSaved: () => void = () => {}) {
+  const saved = () => {
+    isViewUpdated.value = false;
+    onSaved();
+  };
   const view = {
-    filters: JSON.stringify(defaultParams.filters),
+    filters: JSON.stringify(filters),
     columns: JSON.stringify(defaultParams.columns),
     rows: JSON.stringify(defaultParams.rows),
     order_by: defaultParams.order_by,
@@ -924,9 +958,7 @@ function handleViewUpdate() {
           label: __("Save"),
           variant: "solid",
           onClick({ close }) {
-            updateView(view, () => {
-              isViewUpdated.value = false;
-            });
+            updateView(view, saved);
             close();
           },
         },
@@ -940,10 +972,26 @@ function handleViewUpdate() {
       ],
     });
   } else {
-    updateView(view, () => {
-      isViewUpdated.value = false;
-    });
+    updateView(view, saved);
   }
+}
+
+/**
+ * Save Changes: the filters as shown, a cell filter in the URL included. Once
+ * saved, the view holds them, so they leave the URL, unless the list moved on
+ * while a named view's save was on its way.
+ */
+function saveChanges() {
+  const filters = defaultParams.filters;
+  const view = route.query.view;
+  const urlFilters = route.query.filters;
+  handleViewUpdate(filters, () => {
+    if (route.query.view !== view) return;
+    viewFilters = filters;
+    if (urlFilters != null && route.query.filters === urlFilters) {
+      router.replace({ query: { ...route.query, filters: undefined } });
+    }
+  });
 }
 
 const { findView, updateView, defaultView } = useView(options.value.doctype);
@@ -1005,6 +1053,7 @@ function switchToView(view: string): boolean {
 
 /** Touches `filters` only, so filtering never resets the user's sort. */
 function applyUrlFilters() {
+  viewReady.value = true;
   const urlFilters = parseUrlFilters();
   if (!urlFilters) {
     defaultParams.filters = viewFilters;
@@ -1043,8 +1092,10 @@ function findCurrentView() {
 // change is what let a filter silently reset the sort.
 watch(
   [() => route.query.view as string, () => route.query.filters as string],
-  ([view], [previousView]) => {
-    toast.dismiss(CELL_FILTER_TOAST);
+  ([view, filters], [previousView]) => {
+    // vue-sonner dismisses a frame later, so a cell filter's own navigation
+    // would close the toast it is about to show.
+    if (filters !== cellFilterPushed) toast.dismiss(CELL_FILTER_TOAST);
     if (view !== previousView && !switchToView(view)) return;
     applyUrlFilters();
     list.submit({ ...defaultParams });
@@ -1073,7 +1124,7 @@ function handleColumnResize({ key, width, save } = {}) {
   isViewUpdated.value = true;
   defaultParams.columns = columns.value;
   if (!defaultParams.is_default) return;
-  handleViewUpdate();
+  handleViewUpdate(viewFilters);
   isViewUpdated.value = false;
 }
 
