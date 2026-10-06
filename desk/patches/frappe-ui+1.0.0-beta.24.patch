@@ -43,6 +43,45 @@ index 0b7069a..de2a3df 100644
            pluginKey: new PluginKey(options.name),
            items: ({ query }: { query: string }) =>
              typeof options.items === 'function' ? options.items(query) : options.items,
+diff --git a/node_modules/frappe-ui/src/molecules/editor/extensions/content-paste/paste-html-utils.ts b/node_modules/frappe-ui/src/molecules/editor/extensions/content-paste/paste-html-utils.ts
+index 97060b4..e41cdbd 100644
+--- a/node_modules/frappe-ui/src/molecules/editor/extensions/content-paste/paste-html-utils.ts
++++ b/node_modules/frappe-ui/src/molecules/editor/extensions/content-paste/paste-html-utils.ts
+@@ -8,6 +8,16 @@
+ import { DOMParser, Slice } from '@tiptap/pm/model'
+ import type { Node, Schema } from '@tiptap/pm/model'
+ 
++// A lazily-created inert document with no browsing context. An element built in
++// it parses HTML without loading resources or firing load/error handlers, unlike
++// one created from the live `document`; ProseMirror parses the detached subtree
++// the same way. (This mirrors how ProseMirror's own clipboard parser builds its
++// container.)
++let inertDocument: Document | null = null
++function inertDoc(): Document {
++  return inertDocument || (inertDocument = document.implementation.createHTMLDocument(''))
++}
++
+ /**
+  * Rewrite Google-Docs-style `font-size: Npt` declarations to pixels (96/72).
+  * Returns the input unchanged when no `pt` font sizes are present.
+@@ -21,7 +31,7 @@ export function normalizeFontSizePtToPx(html: string): string {
+ 
+ /** True iff the HTML string contains at least one `<img>` element. */
+ export function htmlContainsImage(html: string): boolean {
+-  const div = document.createElement('div')
++  const div = inertDoc().createElement('div')
+   div.innerHTML = html
+   return div.querySelector('img') !== null
+ }
+@@ -32,7 +42,7 @@ export function htmlContainsImage(html: string): boolean {
+  * so pasted code/pre content survives.
+  */
+ export function parseHtmlToSlice(html: string, schema: Schema): Slice {
+-  const div = document.createElement('div')
++  const div = inertDoc().createElement('div')
+   div.innerHTML = normalizeFontSizePtToPx(html)
+   return DOMParser.fromSchema(schema).parseSlice(div, {
+     preserveWhitespace: true,
 diff --git a/node_modules/frappe-ui/src/molecules/editor/extensions/link/link-extension.ts b/node_modules/frappe-ui/src/molecules/editor/extensions/link/link-extension.ts
 index 1447ba9..b6aad68 100644
 --- a/node_modules/frappe-ui/src/molecules/editor/extensions/link/link-extension.ts
