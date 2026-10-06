@@ -121,7 +121,7 @@
             <div
               ref="quotedContentRef"
               contenteditable="true"
-              class="prose !max-w-full mx-1 my-2 border-s-4 border-outline-gray-2 ps-4 text-sm focus:outline-none"
+              class="prose !max-w-full mx-1 my-2 border-s-4 border-outline-gray-2 ps-4 text-sm focus:outline-none overflow-x-auto [contain:paint]"
               @input="onQuotedInput"
             />
           </div>
@@ -222,6 +222,7 @@ import { createDialog } from "@/components/dialogs";
 import { AttachmentIcon } from "@/components/icons";
 import SavedReplyActions from "@/components/SavedReplyActions/SavedReplyActions.vue";
 import { useTyping } from "@/composables/realtime";
+import { sanitizeQuotedEmail } from "@/emailHtml";
 import { getUserEmailInfo } from "@/composables/useUserEmailInfo";
 import { replyComposer } from "@/pages/ticket/modalStates";
 import { useAuthStore } from "@/stores/auth";
@@ -330,6 +331,11 @@ const quotedContent = useStorage<null | string>(
 );
 const quotedContentRef = ref<HTMLElement | null>(null);
 const isQuoteExpanded = ref(false);
+
+// The quote is shown in the page itself, so only sanitized HTML goes in.
+function showQuote(el: HTMLElement, html: string) {
+  el.innerHTML = sanitizeQuotedEmail(html);
+}
 
 function onQuotedInput() {
   const el = quotedContentRef.value;
@@ -457,7 +463,9 @@ const sendMail = createResource({
       message:
         newEmail.value +
         (quotedContentRef.value
-          ? `<p class="reply-to-content"></p><blockquote>${quotedContentRef.value.innerHTML}</blockquote>`
+          ? `<p class="reply-to-content"></p><blockquote>${sanitizeQuotedEmail(
+              quotedContentRef.value.innerHTML
+            )}</blockquote>`
           : ""),
     },
   }),
@@ -520,6 +528,7 @@ function addToReply(
   if (doc.body.children.length === 0) {
     body = `<div style="white-space: pre-wrap; line-height: 1.5">${doc.body.innerHTML}</div>`;
   }
+  body = sanitizeQuotedEmail(body);
 
   if (body !== quotedContent.value) {
     //trigger change for watch when replied to body data is different from current quoted content
@@ -640,7 +649,7 @@ watch(quotedContent, (newVal, oldVal) => {
   if (!oldVal && newVal) {
     nextTick(() => {
       if (quotedContentRef.value) {
-        quotedContentRef.value.innerHTML = newVal;
+        showQuote(quotedContentRef.value, newVal);
       }
     });
   }
@@ -679,7 +688,7 @@ onMounted(() => {
   if (quotedContent.value) {
     nextTick(() => {
       if (quotedContentRef.value) {
-        quotedContentRef.value.innerHTML = quotedContent.value;
+        showQuote(quotedContentRef.value, quotedContent.value);
       }
     });
   }

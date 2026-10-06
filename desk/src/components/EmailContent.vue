@@ -2,14 +2,17 @@
   <iframe
     ref="iframeRef"
     :srcdoc="htmlContent"
+    sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads"
+    :title="__('Email')"
     class="prose-f block h-10 max-h-[500px] w-full"
   />
 </template>
 
 <script setup lang="ts">
+import { sanitizeEmailHtml } from "@/emailHtml";
 import { useAppearanceStore } from "@/stores/appearance";
 import { dataTheme, getFontFamily, stripEmailColors } from "@/utils";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 const props = defineProps({
   content: {
@@ -20,7 +23,8 @@ const props = defineProps({
 
 const appearance = useAppearanceStore();
 const iframeRef = ref<HTMLIFrameElement | null>(null);
-const _content = ref(stripEmailColors(props.content));
+let resizeObserver: ResizeObserver | null = null;
+const _content = ref(stripEmailColors(sanitizeEmailHtml(props.content)));
 
 // Get CSS path - in dev Vite serves it directly, in prod we need the built path
 const cssHref = computed(() => {
@@ -137,6 +141,7 @@ const htmlContent = computed(
   <!DOCTYPE html>
   <html>
   <head>
+    <meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
     <link rel="stylesheet" href="${cssHref.value}" />
     <base target="_blank" />
     <style>
@@ -245,16 +250,30 @@ watch(iframeRef, (iframe) => {
         );
       });
 
-      const replyCollapsers = emailContent.querySelectorAll(".replyCollapser");
-      if (replyCollapsers.length) {
-        replyCollapsers.forEach((replyCollapser) => {
-          replyCollapser.addEventListener("change", () => {
-            iframe.style.height = parent.offsetHeight + 1 + "px";
-          });
+      // Refit when the content's height changes (a quote expands or
+      // collapses). Safari doesn't run listeners the parent adds inside a
+      // sandboxed frame, so the size is observed from the parent.
+      resizeObserver?.disconnect();
+      const frameDoc = iframe.contentDocument;
+      if (!frameDoc) return;
+      resizeObserver = new ResizeObserver(() => {
+        requestAnimationFrame(() => {
+          // Without the 1px tolerance, content sized to the frame (height:
+          // 100%) would grow it a pixel at a time.
+          const height = frameDoc.documentElement.offsetHeight + 1;
+          if (Math.abs(height - parseFloat(iframe.style.height || "0")) > 1) {
+            fitHeight(iframe);
+          }
         });
-      }
+      });
+      resizeObserver.observe(frameDoc.documentElement);
     };
   }
+});
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = null;
 });
 
 watch(dataTheme, (theme) => {

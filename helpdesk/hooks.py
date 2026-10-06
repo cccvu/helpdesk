@@ -81,6 +81,10 @@ doc_events = {
         "on_trash": "helpdesk.extends.assignment_rule.on_assignment_rule_trash",
         "validate": "helpdesk.extends.assignment_rule.on_assignment_rule_validate",
     },
+    "Communication": {
+        "before_validate": "helpdesk.extends.communication.sanitize_content",
+        "before_save": "helpdesk.extends.communication.sanitize_content",
+    },
     "Customer": {
         "after_insert": "helpdesk.integrations.erpnext.customer.after_insert",
         "on_update": "helpdesk.integrations.erpnext.customer.on_update",
