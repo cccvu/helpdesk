@@ -9,10 +9,16 @@ ADDRESS_FIELDS = ("recipients", "cc", "bcc")
 
 # An entry the timeline can render safely: a bare address, or "Display Name
 # <address>" with the one "<...>" pair wrapping the address and no "<" or ">"
-# anywhere else. The address itself carries no space, "@"-count trouble or
-# bracket. Parentheses are allowed in a display name (they render as text), but
-# never angle brackets.
-_NAMED_ADDRESS = re.compile(r"^[^<>]*<(?P<addr>[^<>()\s@]+@[^<>()\s@]+)>$")
+# anywhere else. The bracketed address is held to an HTML-inert email charset
+# (no "/", "=", whitespace, quote or backtick), so the "<address>" the sink
+# renders raw can only tokenize to a single attribute-less unknown element.
+# A looser charset lets "<iframe/onload=alert`1`//@b.com>" through: the "/"
+# starts an attribute, so the browser builds a live <iframe onload=...>. Real
+# addresses use this subset; an exotic-but-valid local part is refused (fail
+# closed), which is safe for a machine-resolved automated-message recipient.
+_NAMED_ADDRESS = re.compile(
+    r"^[^<>]*<(?P<addr>[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>$"
+)
 
 
 def validate_recipients(doc, method=None):

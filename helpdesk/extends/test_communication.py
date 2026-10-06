@@ -30,6 +30,13 @@ class TestValidateRecipients(FrappeTestCase):
             "a@b.com (<svg onload=1>)",
             # Markup in any one entry of a list fails the whole list.
             "a@b.com, x <c@d.com>(<img onerror=1>)",
+            # A "<address>" whose local part carries "/" and "=" (both valid RFC
+            # atext) tokenizes to a live <iframe onload=...> when rendered raw, so
+            # the bracketed address is held to an HTML-inert charset, not just to
+            # validate_email_address. "//" comments out the @domain in the JS.
+            "<iframe/onload=alert`1`//@b.com>",
+            "x <iframe/onload=alert`1`//@b.com>",
+            "<svg/onload=alert`1`//@b.com>",
         )
         for field in ("recipients", "cc", "bcc"):
             for payload in payloads:
