@@ -1,28 +1,40 @@
-import re
+from email.utils import getaddresses
 
-from frappe.utils.html_utils import sanitize_html
+import frappe
+from frappe import _
+from frappe.utils import validate_email_address
 
-# Fields the desk timeline renders as HTML, and whether Frappe linkifies each
-HTML_FIELDS = {"content": True, "subject": False, "sender_full_name": False}
-
-# Where a browser starts a tag, an end tag or a comment; any other "<" is text
-MARKUP = re.compile(r"<[A-Za-z/!?]")
+# A Communication's address lists are Code fields Frappe never sanitizes.
+ADDRESS_FIELDS = ("recipients", "cc", "bcc")
 
 
-def sanitize_content(doc, method=None):
-    """Sanitize a Communication's HTML-bearing fields on every save.
+def validate_recipients(doc, method=None):
+    """Refuse markup in an Automated Message's recipient, cc and bcc lists.
 
-    Runs before validate, which ignore_validate doesn't skip, and again before
-    save, after validate may have filled in the sender's name.
-
-    Frappe v15's sanitize_html skips some values that carry HTML: a value that
-    parses as JSON, and one in which BeautifulSoup finds no tag. Upstream
-    develop sanitizes both (frappe/frappe#41626 and has_html_tags); drop this
-    hook once v15 has both.
+    /app's form timeline prints an Automated Message's recipients, cc and bcc as
+    HTML, one entry at a time, through a microtemplate that doesn't escape
+    ({{ frappe.user_info(email).fullname || email }}), and builds it with jQuery
+    in the live page. The fields are Code fields Frappe never sanitizes, and
+    Frappe validates addresses only for an outgoing "Communication" email, so any
+    other type can store script that runs for whoever opens the referenced record.
+    A content sanitizer can't cover this without mangling a
+    '"Name" <addr>' recipient, so reject any entry whose address isn't an email
+    or whose display name carries markup. Drop once Frappe escapes these values
+    in the timeline template.
     """
-    for fieldname, linkify in HTML_FIELDS.items():
+    if doc.get("communication_type") != "Automated Message":
+        # Only this type reaches the raw-HTML timeline branch; Frappe validates an
+        # outgoing email's own addresses, and a received email's are left as sent.
+        return
+    for fieldname in ADDRESS_FIELDS:
         value = doc.get(fieldname)
-        if isinstance(value, str) and MARKUP.search(value):
-            doc.set(
-                fieldname, sanitize_html(value, linkify=linkify, always_sanitize=True)
-            )
+        if not value:
+            continue
+        for name, addr in getaddresses([value]):
+            if not name and not addr:
+                continue
+            if "<" in name or ">" in name or not validate_email_address(addr):
+                frappe.throw(
+                    _("An automated message has an invalid recipient address."),
+                    title=_("Invalid Recipient"),
+                )
