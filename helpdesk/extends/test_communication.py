@@ -22,6 +22,14 @@ class TestValidateRecipients(FrappeTestCase):
             "<img src=x onerror=1>",
             '"<img onerror=1>" <a@b.com>',
             "<!--><img onerror=1>-->",
+            # The /app timeline splits on "," and renders each entry raw, so an
+            # address that parses cleanly but trails markup is still a live sink.
+            # getaddresses would accept both of these (it drops "(...)" comments);
+            # the guard splits as the sink does and fails closed.
+            "x <a@b.com>(<img src=x onerror=1>)",
+            "a@b.com (<svg onload=1>)",
+            # Markup in any one entry of a list fails the whole list.
+            "a@b.com, x <c@d.com>(<img onerror=1>)",
         )
         for field in ("recipients", "cc", "bcc"):
             for payload in payloads:
@@ -30,13 +38,26 @@ class TestValidateRecipients(FrappeTestCase):
                     with self.assertRaises(frappe.ValidationError):
                         validate_recipients(doc)
 
-    def test_allows_plain_and_named_addresses(self) -> None:
+    def test_rejects_an_invalid_bare_address(self) -> None:
+        # No markup, but not an address either: fail closed rather than pass it on.
+        doc = automated_message(recipients="not-an-address")
+        with self.assertRaises(frappe.ValidationError):
+            validate_recipients(doc)
+
+    def test_allows_plain_named_and_parenthesised_addresses(self) -> None:
         doc = automated_message(
             recipients="a@b.com, c@d.com",
             cc='"John Doe" <john@example.com>',
-            bcc="",
+            bcc="John (Admin) <john@example.com>",
         )
         validate_recipients(doc)  # does not raise
+
+    def test_allows_empty_entries_and_trailing_commas(self) -> None:
+        # The timeline drops empty entries, so an empty value or a trailing comma
+        # must not be rejected.
+        for value in ("", "a@b.com,", " a@b.com , c@d.com "):
+            with self.subTest(value=value):
+                validate_recipients(automated_message(recipients=value))
 
     def test_only_automated_messages_are_checked(self) -> None:
         # A normal email isn't this sink; Frappe validates its own addresses, and
