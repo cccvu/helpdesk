@@ -76,14 +76,15 @@ user_invitation = {
 doc_events = {
     "*": {
         "validate": "helpdesk.extends.attach_field.validate_private_attachments",
+        "before_validate": "helpdesk.extends.document.sanitize_html_fields",
+        "before_save": "helpdesk.extends.document.sanitize_html_fields",
     },
     "Assignment Rule": {
         "on_trash": "helpdesk.extends.assignment_rule.on_assignment_rule_trash",
         "validate": "helpdesk.extends.assignment_rule.on_assignment_rule_validate",
     },
     "Communication": {
-        "before_validate": "helpdesk.extends.communication.sanitize_content",
-        "before_save": "helpdesk.extends.communication.sanitize_content",
+        "before_validate": "helpdesk.extends.communication.validate_recipients",
     },
     "Customer": {
         "after_insert": "helpdesk.integrations.erpnext.customer.after_insert",
