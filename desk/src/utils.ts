@@ -804,12 +804,14 @@ const COLOR_PROPS = new Set([
 ]);
 
 // Strip color-related inline styles + bgcolor/color attrs so iframe CSS controls colors.
+// Parses into a <template>, which is inert: nothing in the HTML loads or runs.
 export function stripEmailColors(html: string): string {
   if (!html) return html;
-  const div = document.createElement("div");
-  div.innerHTML = html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const content = template.content;
 
-  div.querySelectorAll("[style]").forEach((el) => {
+  content.querySelectorAll("[style]").forEach((el) => {
     const styles = el.getAttribute("style") || "";
     const filtered = styles
       .split(";")
@@ -824,14 +826,14 @@ export function stripEmailColors(html: string): string {
     else el.removeAttribute("style");
   });
 
-  div
+  content
     .querySelectorAll("[bgcolor]")
     .forEach((el) => el.removeAttribute("bgcolor"));
-  div
+  content
     .querySelectorAll("font[color]")
     .forEach((el) => el.removeAttribute("color"));
 
-  return div.innerHTML;
+  return template.innerHTML;
 }
 
 // Shared reactive mirror of <html data-theme> for JS-driven theme-aware components

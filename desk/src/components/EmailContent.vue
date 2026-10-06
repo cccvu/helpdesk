@@ -7,6 +7,7 @@
 </template>
 
 <script setup lang="ts">
+import { sanitizeEmailHtml } from "@/emailHtml";
 import { useAppearanceStore } from "@/stores/appearance";
 import { dataTheme, getFontFamily, stripEmailColors } from "@/utils";
 import { computed, ref, watch } from "vue";
@@ -20,7 +21,7 @@ const props = defineProps({
 
 const appearance = useAppearanceStore();
 const iframeRef = ref<HTMLIFrameElement | null>(null);
-const _content = ref(stripEmailColors(props.content));
+const _content = ref(stripEmailColors(sanitizeEmailHtml(props.content)));
 
 // Get CSS path - in dev Vite serves it directly, in prod we need the built path
 const cssHref = computed(() => {
