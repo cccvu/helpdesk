@@ -1,8 +1,9 @@
 import frappe
 from frappe import _
 from frappe.desk.form.assign_to import set_status
-from frappe.model import no_value_fields
+from frappe.model import get_permitted_fields, no_value_fields
 from frappe.model.document import get_controller
+from frappe.utils import create_batch, cstr
 from frappe.utils.caching import redis_cache
 from pypika import Criterion
 
@@ -16,6 +17,7 @@ from helpdesk.utils import (
 )
 
 SLA_ROW_FIELDS = ["sla", "status", "first_responded_on", "resolution_date"]
+TITLE_BATCH_SIZE = 500
 
 
 @frappe.whitelist()
@@ -42,8 +44,6 @@ def get_list_data(
     view_name = view.get("name") if view else None
 
     group_by_field = view.get("group_by_field") if view else None
-    label_doc = view.get("label_doc") if view else None
-    label_field = view.get("label_field") if view else None
 
     handle_at_me_support(filters)
     handle_assigned_on_filter(filters, doctype)
@@ -79,7 +79,8 @@ def get_list_data(
         if not default_view:
             if doctype == "Contact":
                 columns = contact_default_columns
-                rows = contact_default_rows
+                # a copy: the rows below are extended per request
+                rows = list(contact_default_rows)
             elif doctype == "TP Call Log":
                 columns = call_log_default_columns
             elif hasattr(_list, "default_list_data"):
@@ -174,17 +175,24 @@ def get_list_data(
             if fieldtype == "Select":
                 return [option for option in options.split("\n")]
             else:
+                link_doctype = options if fieldtype == "Link" else None
                 has_empty_values = any([not d.get(group_by_field) for d in data])
                 options = list(set([d.get(group_by_field) for d in data]))
                 options = [u for u in options if u]
                 options = [category_name for category_name in options if category_name]
+                # a Link value is labelled with its target's title when the user
+                # may read it (Frappe's link-title rules), otherwise with itself
+                titles = {}
+                if link_doctype and (title_field := get_link_title_field(link_doctype)):
+                    titles = {
+                        cstr(name): title
+                        for name, title in get_link_titles(
+                            link_doctype, title_field, set(options)
+                        ).items()
+                    }
                 options = [
                     {
-                        "label": frappe.db.get_value(
-                            label_doc if label_doc else doctype,
-                            option,
-                            label_field if label_field else group_by_field,
-                        ),
+                        "label": cstr(titles.get(cstr(option)) or option),
                         "value": option,
                     }
                     for option in options
@@ -241,6 +249,57 @@ def get_list_data(
         "group_by_field": group_by_field,
         "view_type": view_type,
     }
+
+
+def get_link_title_field(doctype: str) -> str | None:
+    """
+    The title field shown for links to `doctype`, or None when links show the
+    name or the user may not read the title.
+
+    Backport of Frappe develop's `frappe.desk.link_title.get_link_title_field`
+    (the `select` check, frappe/frappe PR #43391; version-16's copy checks
+    `read`); import it from there once the pinned Frappe ships it. Unlike
+    upstream, it also returns None for an empty doctype, a missing one
+    (clearing the queued message, as v15's `get_link_title` does), and a
+    doctype whose titles `frappe.get_list` can't read.
+    """
+    if not doctype:
+        return None
+    try:
+        meta = frappe.get_meta(doctype)
+    except frappe.DoesNotExistError:
+        frappe.clear_last_message()
+        return None
+    if meta.issingle or meta.istable or meta.is_virtual:
+        return None
+    if not (meta.show_title_field_in_link and meta.title_field):
+        return None
+
+    title_field = meta.title_field.strip()
+    if title_field == "name" or not frappe.has_permission(doctype, "select"):
+        return None
+    if title_field not in get_permitted_fields(doctype, ignore_virtual=True):
+        return None
+
+    return title_field
+
+
+def get_link_titles(doctype: str, title_field: str, names: set) -> dict:
+    """
+    Titles of the documents among `names` the user may read, keyed by name.
+
+    Backport of Frappe develop's `frappe.desk.link_title.get_link_titles`.
+    """
+    titles = {}
+    for names_batch in create_batch(list(names), TITLE_BATCH_SIZE):
+        rows = frappe.get_list(
+            doctype,
+            filters={"name": ("in", names_batch)},
+            fields=["name", title_field],
+            limit=len(names_batch),
+        )
+        titles.update({row.name: row.get(title_field) for row in rows})
+    return titles
 
 
 @frappe.whitelist()
