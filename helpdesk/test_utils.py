@@ -383,18 +383,20 @@ def timeline_node(result: dict, key: str) -> dict | None:
 def add_comment(
     ticket: str,
     content: str = "This is a test comment.",
-    comment_by: str | None = None,
+    commented_by: str | None = None,
     save: bool = True,
 ):
     """
-    Creates a test HD Ticket Comment for a given ticket.
+    Creates a test HD Ticket Comment for a given ticket. A saved comment's
+    author is the session user, whatever `commented_by` says: only inserts
+    that skip permissions keep it.
     """
     comment = frappe.get_doc(
         {
             "doctype": "HD Ticket Comment",
             "reference_ticket": ticket,
             "content": content,
-            "comment_by": comment_by,
+            "commented_by": commented_by,
         }
     )
     if save:
@@ -896,3 +898,59 @@ def custom_docperm(doctype: str, role: str, **rights):
                 "Custom DocPerm", row.name, {right: row[right] for right in rights}
             )
         frappe.clear_cache(doctype=doctype)
+
+
+def set_value_as(user: str, doctype: str, name: str, values: dict):
+    """Set `values` on a document as `user` through frappe.client.set_value
+    with a dict, which saves the document and checks write permission.
+    Restores the previous user."""
+    from frappe.client import set_value
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return set_value(doctype, name, values)
+    finally:
+        frappe.set_user(previous)
+
+
+def insert_as(user: str, doc: dict):
+    """Insert `doc` as `user` through frappe.client.insert, which checks create
+    permission (or, for a child row, write on its parent). Returns the inserted
+    document (the parent, for a child row) as a dict and restores the previous
+    user."""
+    from frappe.client import insert
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return insert(doc)
+    finally:
+        frappe.set_user(previous)
+
+
+def share_doc_as(user: str, doctype: str, name: str, with_user: str, **rights):
+    """Share a document with `with_user` (read, plus `rights`) as `user`
+    through frappe.share.add, which checks share permission. Restores the
+    previous user."""
+    from frappe.share import add
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return add(doctype, name, user=with_user, read=1, **rights)
+    finally:
+        frappe.set_user(previous)
+
+
+def insert_as_data_import(doc: dict):
+    """Insert `doc` as the session user the way Data Import's insert mode
+    does: a plain insert with frappe.flags.in_import set. Returns the inserted
+    document."""
+    frappe.flags.in_import = True
+    try:
+        new_doc = frappe.new_doc(doc["doctype"])
+        new_doc.update(doc)
+        return new_doc.insert()
+    finally:
+        frappe.flags.in_import = False

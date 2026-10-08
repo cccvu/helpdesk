@@ -6,13 +6,49 @@ from frappe import _
 from frappe.model.document import Document
 
 from helpdesk.mixins.mentions import HasMentions
-from helpdesk.utils import capture_event, get_doc_room, publish_event
+from helpdesk.utils import capture_event, get_doc_room, is_agent_manager, publish_event
 
 PRESET_EMOJIS = ["👍", "👎", "❤️", "🎉", "👀", "✅"]
+
+# Rights on a saved comment that only its author or a manager has. "create" is
+# here because inserting a child row (a reaction) checks create on the parent.
+AUTHOR_ONLY = ("write", "delete", "share", "create")
 
 
 class HDTicketComment(HasMentions, Document):
     mentions_field = "content"
+
+    def before_insert(self):
+        # a comment is always the session user's own, whatever the client sent
+        if not self._skips_author_checks():
+            self.commented_by = frappe.session.user
+
+    def validate(self):
+        # Frappe already refuses a change of owner on update
+        if self.is_new() or self._skips_author_checks():
+            return
+        previous = self.get_doc_before_save()
+        # link validation may correct the case of a stored author
+        if (
+            previous
+            and (previous.commented_by or "").lower()
+            != (self.commented_by or "").lower()
+        ):
+            frappe.throw(
+                _("A comment's author can't be changed."), frappe.PermissionError
+            )
+
+    def _skips_author_checks(self) -> bool:
+        """Server code that saves with ignore_permissions (merge copies keep
+        their authors, reactions save as the reacting user), Data Import and
+        install, patch and migrate runs keep commented_by as given."""
+        return bool(
+            self.flags.ignore_permissions
+            or frappe.flags.in_import
+            or frappe.flags.in_install
+            or frappe.flags.in_patch
+            or frappe.flags.in_migrate
+        )
 
     def on_update(self):
         if self.has_value_changed("content"):
@@ -189,3 +225,28 @@ def notify_reaction(doc, emoji, user):
 @frappe.whitelist()
 def get_preset_emojis():
     return PRESET_EMOJIS
+
+
+def has_permission(doc, ptype="read", user=None):
+    """Only a comment's author or a manager changes, deletes or shares it.
+
+    Judged by the stored comment's author, so a save can't change what is
+    checked. A comment that isn't stored yet (a new one, or an upload to an
+    unsaved one) is left to the role permissions; before_insert makes it the
+    session user's. Other rights are unchanged.
+    """
+    user = user or frappe.session.user
+    if ptype not in AUTHOR_ONLY or not doc.name:
+        return True
+    stored = frappe.db.get_value(
+        "HD Ticket Comment", doc.name, "commented_by", as_dict=True
+    )
+    if not stored:
+        return True
+    return is_agent_manager(user) or is_same_user(stored.commented_by, user)
+
+
+def is_same_user(a: str | None, b: str | None) -> bool:
+    """Whether two user names are the same user: names match case-insensitively,
+    and an empty name matches no one."""
+    return bool(a) and bool(b) and a.lower() == b.lower()

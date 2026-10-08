@@ -6,13 +6,26 @@ from frappe.desk.form.assign_to import remove
 from frappe.tests.utils import FrappeTestCase
 
 from helpdesk.api.ticket import assign_ticket_to_agent
+from helpdesk.helpdesk.doctype.hd_ticket.api import merge_ticket
 from helpdesk.helpdesk.doctype.hd_ticket_comment.hd_ticket_comment import (
+    AUTHOR_ONLY,
     PRESET_EMOJIS,
     get_reactions,
+    has_permission,
     toggle_reaction,
 )
 from helpdesk.mixins.mentions import HasMentions
-from helpdesk.test_utils import create_agent
+from helpdesk.test_utils import (
+    create_agent,
+    delete_doc_as,
+    insert_as,
+    insert_as_data_import,
+    make_agent,
+    make_agent_manager,
+    make_ticket,
+    set_value_as,
+    share_doc_as,
+)
 
 
 class TestHDTicketComment(FrappeTestCase):
@@ -414,3 +427,217 @@ class TestHDTicketComment(FrappeTestCase):
         self.assertEqual(notification.message, "2 people reacted to your comment")
 
         frappe.delete_doc("HD Notification", notification.name, force=True)
+
+
+class TestHDTicketCommentRights(FrappeTestCase):
+    """Only a comment's author or a manager changes, deletes or shares it, and
+    a comment's author is the user who posted it."""
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        frappe.db.set_single_value("HD Settings", "enable_comment_reactions", 1)
+        self.addCleanup(
+            frappe.db.set_single_value, "HD Settings", "enable_comment_reactions", 0
+        )
+        self.author = make_agent("comment_rights_author@example.com")
+        self.other = make_agent("comment_rights_other@example.com")
+        self.manager = make_agent_manager("comment_rights_manager@example.com")
+        self.ticket = make_ticket(raised_by="comment_rights_requester@example.com")
+        self.note = self.post_note(self.author, "<p>Author's note</p>")
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def post_note(self, user: str, content: str) -> str:
+        """Post a note on the test ticket as `user`, the way the agent UI does."""
+        frappe.set_user(user)
+        try:
+            frappe.get_doc("HD Ticket", self.ticket.name).new_comment(content)
+        finally:
+            frappe.set_user("Administrator")
+        return frappe.get_last_doc(
+            "HD Ticket Comment", {"reference_ticket": self.ticket.name}
+        ).name
+
+    def stored(self, name: str | None = None) -> dict:
+        return frappe.db.get_value(
+            "HD Ticket Comment",
+            name or self.note,
+            ["content", "commented_by", "owner"],
+            as_dict=True,
+        )
+
+    def test_note_is_posted_as_its_author(self):
+        self.assertEqual(self.stored().commented_by, self.author)
+        self.assertEqual(self.stored().owner, self.author)
+
+    def test_other_agent_cannot_change_note(self):
+        before = self.stored()
+        changes = {
+            "content": {"content": "<p>Changed</p>"},
+            "commented_by": {"content": "<p>Changed</p>", "commented_by": self.other},
+            "owner": {"content": "<p>Changed</p>", "owner": self.other},
+        }
+        for case, values in changes.items():
+            with self.subTest(case=case):
+                with self.assertRaises(frappe.PermissionError):
+                    set_value_as(self.other, "HD Ticket Comment", self.note, values)
+                self.assertEqual(self.stored(), before)
+
+    def test_other_agent_cannot_delete_note(self):
+        with self.assertRaises(frappe.PermissionError):
+            delete_doc_as(self.other, "HD Ticket Comment", self.note)
+        self.assertTrue(frappe.db.exists("HD Ticket Comment", self.note))
+
+    def test_other_agent_cannot_share_note(self):
+        with self.assertRaises(frappe.PermissionError):
+            share_doc_as(
+                self.other, "HD Ticket Comment", self.note, self.other, write=1
+            )
+        self.assertFalse(
+            frappe.db.exists(
+                "DocShare",
+                {"share_doctype": "HD Ticket Comment", "share_name": self.note},
+            )
+        )
+
+    def test_other_agent_cannot_insert_reaction_rows(self):
+        row = {
+            "doctype": "HD Comment Reaction",
+            "parenttype": "HD Ticket Comment",
+            "parent": self.note,
+            "parentfield": "reactions",
+            "user": self.author,
+            "emoji": PRESET_EMOJIS[0],
+        }
+        with self.assertRaises(frappe.PermissionError):
+            insert_as(self.other, row)
+
+        frappe.set_user(self.other)
+        try:
+            with self.assertRaises(frappe.PermissionError):
+                frappe.get_doc(row).insert()
+        finally:
+            frappe.set_user("Administrator")
+
+        self.assertFalse(frappe.get_doc("HD Ticket Comment", self.note).reactions)
+
+    def test_other_agent_can_still_react(self):
+        frappe.set_user(self.other)
+        try:
+            self.assertEqual(
+                toggle_reaction(self.note, PRESET_EMOJIS[0])["action"], "added"
+            )
+        finally:
+            frappe.set_user("Administrator")
+
+        reactions = frappe.get_doc("HD Ticket Comment", self.note).reactions
+        self.assertEqual([(r.user, r.emoji) for r in reactions], [(self.other, "👍")])
+
+    def test_author_and_manager_can_change_and_delete(self):
+        set_value_as(self.author, "HD Ticket Comment", self.note, {"content": "A"})
+        self.assertEqual(self.stored().content, "A")
+        set_value_as(self.manager, "HD Ticket Comment", self.note, {"content": "M"})
+        self.assertEqual(self.stored().content, "M")
+        self.assertEqual(self.stored().commented_by, self.author)
+
+        delete_doc_as(self.manager, "HD Ticket Comment", self.note)
+        self.assertFalse(frappe.db.exists("HD Ticket Comment", self.note))
+
+        own = self.post_note(self.author, "<p>Another note</p>")
+        delete_doc_as(self.author, "HD Ticket Comment", own)
+        self.assertFalse(frappe.db.exists("HD Ticket Comment", own))
+
+    def test_author_match_ignores_case(self):
+        frappe.db.set_value(
+            "HD Ticket Comment", self.note, "commented_by", self.author.upper()
+        )
+        set_value_as(self.author, "HD Ticket Comment", self.note, {"content": "A"})
+        self.assertEqual(self.stored().content, "A")
+
+    def test_insert_naming_someone_else_is_stored_as_poster(self):
+        insert_as(
+            self.other,
+            {
+                "doctype": "HD Ticket Comment",
+                "reference_ticket": self.ticket.name,
+                "content": "<p>Posted by other</p>",
+                "commented_by": self.author,
+            },
+        )
+        note = frappe.get_last_doc(
+            "HD Ticket Comment", {"reference_ticket": self.ticket.name}
+        )
+        self.assertEqual(note.commented_by, self.other)
+        self.assertEqual(note.owner, self.other)
+
+    def test_nobody_changes_a_notes_author(self):
+        # Frappe itself refuses a change of owner on update
+        errors = {
+            "commented_by": frappe.PermissionError,
+            "owner": frappe.CannotChangeConstantError,
+        }
+        for user in (self.author, self.manager):
+            for field, error in errors.items():
+                with self.subTest(user=user, field=field):
+                    with self.assertRaises(error):
+                        set_value_as(
+                            user, "HD Ticket Comment", self.note, {field: self.other}
+                        )
+                    self.assertEqual(self.stored().commented_by, self.author)
+                    self.assertEqual(self.stored().owner, self.author)
+
+    def test_merge_keeps_authors(self):
+        target = make_ticket(raised_by="comment_rights_requester@example.com")
+
+        frappe.set_user(self.other)
+        try:
+            merge_ticket(source=self.ticket.name, target=target.name)
+        finally:
+            frappe.set_user("Administrator")
+
+        copies = frappe.get_all(
+            "HD Ticket Comment",
+            filters={"reference_ticket": target.name},
+            fields=["commented_by", "owner"],
+        )
+        self.assertIn(
+            (self.author, self.author), [(c.commented_by, c.owner) for c in copies]
+        )
+
+    def test_data_import_keeps_author(self):
+        note = insert_as_data_import(
+            {
+                "doctype": "HD Ticket Comment",
+                "reference_ticket": self.ticket.name,
+                "content": "<p>Imported</p>",
+                "commented_by": self.author,
+            }
+        )
+        self.assertEqual(self.stored(note.name).commented_by, self.author)
+
+    def test_upload_to_unsaved_note_is_allowed(self):
+        from frappe.handler import check_write_permission
+
+        frappe.set_user(self.other)
+        try:
+            check_write_permission("HD Ticket Comment", "new-hd-ticket-comment-1")
+        finally:
+            frappe.set_user("Administrator")
+
+    def test_hook_judges_the_stored_author(self):
+        doc = frappe.get_doc("HD Ticket Comment", self.note)
+        doc.commented_by = self.other
+        for ptype in AUTHOR_ONLY:
+            with self.subTest(ptype=ptype):
+                self.assertFalse(has_permission(doc, ptype=ptype, user=self.other))
+                self.assertTrue(has_permission(doc, ptype=ptype, user=self.author))
+        self.assertTrue(has_permission(doc, ptype="read", user=self.other))
+
+    def test_manager_can_edit_note_without_author(self):
+        frappe.db.set_value("HD Ticket Comment", self.note, "commented_by", None)
+        set_value_as(self.manager, "HD Ticket Comment", self.note, {"content": "M"})
+        self.assertEqual(self.stored().content, "M")
+        self.assertIsNone(self.stored().commented_by)
+        with self.assertRaises(frappe.PermissionError):
+            set_value_as(self.author, "HD Ticket Comment", self.note, {"content": "A"})
