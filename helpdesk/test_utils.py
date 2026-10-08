@@ -706,3 +706,97 @@ def make_private_file(
         ).insert(ignore_permissions=True)
     finally:
         frappe.set_user(previous)
+
+
+def make_team_as(user: str, team_name: str, members=()):
+    """Insert an HD Team as `user` through frappe.client.insert, which checks
+    create permission. Returns the inserted team as a dict and restores the
+    previous user."""
+    from frappe.client import insert
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return insert(
+            {
+                "doctype": "HD Team",
+                "team_name": team_name,
+                "users": [{"user": member} for member in members],
+            }
+        )
+    finally:
+        frappe.set_user(previous)
+
+
+def update_team_as(user: str, team_name: str, **values):
+    """Set `values` on an HD Team and save it as `user`, which checks write
+    permission. Restores the previous user."""
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        team = frappe.get_doc("HD Team", team_name)
+        team.update(values)
+        return team.save()
+    finally:
+        frappe.set_user(previous)
+
+
+def rename_team_as(user: str, old_name: str, new_name: str):
+    """Rename an HD Team as `user` through frappe.client.rename_doc, which
+    validates the rename (write permission, allow_rename, name rules).
+    Restores the previous user."""
+    from frappe.client import rename_doc
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return rename_doc("HD Team", old_name, new_name)
+    finally:
+        frappe.set_user(previous)
+
+
+def delete_team_as(user: str, team_name: str):
+    """Delete an HD Team as `user` through frappe.client.delete, which checks
+    delete permission. Restores the previous user."""
+    from frappe.client import delete
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        delete("HD Team", team_name)
+    finally:
+        frappe.set_user(previous)
+
+
+def share_team_as(user: str, team_name: str, with_user: str):
+    """Share an HD Team with `with_user` (read and write) as `user` through
+    frappe.share.add, which checks share permission. Restores the previous
+    user."""
+    from frappe.share import add
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return add("HD Team", team_name, user=with_user, read=1, write=1)
+    finally:
+        frappe.set_user(previous)
+
+
+def get_team_rule_state(team_name: str) -> dict:
+    """The routing state of a team's Assignment Rule, read from the database:
+    its conditions, their JSON copies, whether it is disabled, its users and
+    its priority. Empty when the team has no rule or the rule is missing."""
+    rule_name = frappe.db.get_value("HD Team", team_name, "assignment_rule")
+    if not rule_name or not frappe.db.exists("Assignment Rule", rule_name):
+        return {}
+    rule = frappe.get_doc("Assignment Rule", rule_name)
+    return {
+        "name": rule.name,
+        "assign_condition": rule.assign_condition,
+        "assign_condition_json": rule.assign_condition_json,
+        "unassign_condition": rule.unassign_condition,
+        "unassign_condition_json": rule.unassign_condition_json,
+        "disabled": rule.disabled,
+        "users": sorted(row.user for row in rule.users),
+        "priority": rule.priority,
+    }
