@@ -22,6 +22,7 @@ from helpdesk.test_utils import (
     insert_as_data_import,
     make_agent,
     make_agent_manager,
+    make_mention_html,
     make_ticket,
     set_value_as,
     share_doc_as,
@@ -314,7 +315,7 @@ class TestHDTicketComment(FrappeTestCase):
         frappe.delete_doc("HD Ticket Comment", agent_comment.name, force=True)
 
     def test_if_repeated_notification_sent_on_mention_add(self):
-        agent_one = self.agent_emails[0]
+        agent_one, agent_two, agent_three = self.agent_emails[0:3]
         frappe.set_user(agent_one)
         self.assign_agent(agent_one)
 
@@ -322,17 +323,7 @@ class TestHDTicketComment(FrappeTestCase):
             {
                 "doctype": "HD Ticket Comment",
                 "reference_ticket": self.test_ticket.name,
-                "content": """
-                <p>
-                    Hello
-                    <span class="mention"
-                        data-type="mention"
-                        data-id="test_user2@example.com"
-                        data-label="Test User Two">
-                        @Test User Two
-                    </span>
-                </p>
-            """,
+                "content": f"<p>Hello {make_mention_html(agent_two)}</p>",
                 "commented_by": agent_one,
                 "owner": agent_one,
             }
@@ -346,29 +337,17 @@ class TestHDTicketComment(FrappeTestCase):
                 "reference_comment": agent_comment.name,
                 "notification_type": "Mention",
             },
-            fields=["name", "user_to"],
+            fields=["name", "user_to", "user_from"],
         )
         # notification one created should be equal to 1
         self.assertEqual(len(notifications), 1)
-        self.assertEqual(notifications[0].user_to, "test_user2@example.com")
+        self.assertEqual(notifications[0].user_to, agent_two)
+        self.assertEqual(notifications[0].user_from, agent_one)
 
-        agent_comment.content = """
-            <p>
-                Hello
-                <span class="mention"
-                    data-type="mention"
-                    data-id="test_user2@example.com"
-                    data-label="Test User Two">
-                    @Test User Two
-                </span>
-                <span class="mention"
-                    data-type="mention"
-                    data-id="test_user1@example.com"
-                    data-label="Test User One">
-                    @Test User One
-                </span>
-            </p>
-        """
+        agent_comment.content = (
+            f"<p>Hello {make_mention_html(agent_two)} "
+            f"{make_mention_html(agent_three)}</p>"
+        )
 
         agent_comment.save(ignore_permissions=True)
         agent_comment.reload()
@@ -384,8 +363,8 @@ class TestHDTicketComment(FrappeTestCase):
         user_emails = {n.user_to for n in notifications_updated}
 
         self.assertEqual(len(notifications_updated), 2)
-        self.assertIn("test_user2@example.com", user_emails)
-        self.assertIn("test_user1@example.com", user_emails)
+        self.assertIn(agent_two, user_emails)
+        self.assertIn(agent_three, user_emails)
 
     def test_grouped_notifications(self):
         test_users = self.agent_emails[3:6]

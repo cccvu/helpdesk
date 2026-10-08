@@ -67,3 +67,35 @@ class HDNotification(Document):
                 template="notification",
                 args=self.get_args(),
             )
+
+
+# Notifications are made by server code (mentions, assignments, reactions),
+# which inserts them with ignore_permissions.
+SERVER_ONLY = ("create", "write", "delete", "share", "submit", "cancel", "amend")
+
+
+def has_permission(doc, ptype=None, user=None):
+    """A user reads only the notifications sent to them, and only server code
+    creates or changes notifications. System Managers are unrestricted.
+    Judged by the stored recipient when the notification is stored."""
+    user = user or frappe.session.user
+    if "System Manager" in frappe.get_roles(user):
+        return True
+    if ptype in SERVER_ONLY:
+        return False
+    stored = (
+        frappe.db.get_value("HD Notification", doc.name, "user_to", as_dict=True)
+        if doc.name
+        else None
+    )
+    user_to = stored.user_to if stored else doc.user_to
+    return (user_to or "").lower() == user.lower()
+
+
+def permission_query(user=None):
+    """List only the user's own notifications, except for System Managers.
+    Also called for Administrator, who has every role."""
+    user = user or frappe.session.user
+    if "System Manager" in frappe.get_roles(user):
+        return ""
+    return f"`tabHD Notification`.user_to = {frappe.db.escape(user)}"

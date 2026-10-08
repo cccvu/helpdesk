@@ -954,3 +954,14 @@ def insert_as_data_import(doc: dict):
         return new_doc.insert()
     finally:
         frappe.flags.in_import = False
+
+
+def make_mention_html(agent: str | None, label: str = "Agent") -> str:
+    """A mention of `agent` as the agent UI's comment editor writes it: a span
+    whose data-id is the HD Agent's name. With no agent, a span without
+    data-id."""
+    data_id = f' data-id="{agent}"' if agent else ""
+    return (
+        f'<span class="mention" data-type="mention"{data_id} '
+        f'data-label="{label}">@{label}</span>'
+    )
