@@ -148,7 +148,8 @@ ignore_links_on_delete = [
 
 # Requests
 # ---------------
-# Interim backport of frappe/frappe#44068: drop with helpdesk/overrides/document.py.
+# Interim backport of frappe/frappe#44068 that also ignores a client's force:
+# drop with helpdesk/overrides/document.py.
 before_request = ["helpdesk.overrides.document.ignore_client_validate_rename"]
 
 # setup wizard

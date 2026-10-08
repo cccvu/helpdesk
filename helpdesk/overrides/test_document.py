@@ -4,12 +4,12 @@ from frappe.model.rename_doc import update_document_title
 from frappe.tests.utils import FrappeTestCase
 
 from helpdesk.overrides.document import ignore_client_validate_rename
-from helpdesk.test_utils import get_team_rule_state, make_agent, make_team
+from helpdesk.test_utils import get_team_rule_state, make_agent, make_team, make_ticket
 
 
 class TestValidatedRename(FrappeTestCase):
     """Every rename a client asks for is validated: the caller's
-    validate_rename is ignored."""
+    validate_rename and force are ignored."""
 
     def setUp(self):
         frappe.set_user("Administrator")
@@ -52,6 +52,26 @@ class TestValidatedRename(FrappeTestCase):
         self.assertTrue(frappe.db.exists("HD Team", self.team))
         self.assertFalse(frappe.db.exists("HD Team", "Test Rename Shim 2"))
         self.assertEqual(get_team_rule_state(self.team), state)
+
+    def test_writer_cannot_force_a_rename(self):
+        ticket = make_ticket(subject="Test Rename Shim Ticket").name
+        new_name = "Test Rename Shim Forced"
+        frappe.db.savepoint("forced_rename")
+        frappe.set_user(self.agent)
+        try:
+            doc = frappe.get_doc("HD Ticket", ticket)
+            self.assertTrue(doc.has_permission("write"))
+            # As run_doc_method calls it for a client.
+            with self.assertRaisesRegex(
+                frappe.ValidationError, "not allowed to be renamed"
+            ):
+                doc.run_method("rename", name=new_name, force=True)
+        finally:
+            frappe.set_user("Administrator")
+            frappe.db.rollback(save_point="forced_rename")
+
+        self.assertTrue(frappe.db.exists("HD Ticket", ticket))
+        self.assertFalse(frappe.db.exists("HD Ticket", new_name))
 
     def test_validated_rename_still_works(self):
         doc = frappe.get_doc("HD Team", self.team)
