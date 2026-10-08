@@ -1,6 +1,8 @@
 # Copyright (c) 2024, Frappe Technologies and Contributors
 # See license.txt
 
+from unittest.mock import patch
+
 import frappe
 from frappe.desk.form.assign_to import remove
 from frappe.tests.utils import FrappeTestCase
@@ -583,6 +585,30 @@ class TestHDTicketCommentRights(FrappeTestCase):
         self.assertIn(
             (self.author, self.author), [(c.commented_by, c.owner) for c in copies]
         )
+
+    def test_merge_does_not_notify_mentions_again(self):
+        mentioned = make_agent("comment_rights_mentioned@example.com")
+        self.post_note(self.author, f"<p>{make_mention_html(mentioned)}</p>")
+        target = make_ticket(raised_by="comment_rights_requester@example.com")
+
+        def mentions():
+            return frappe.db.count(
+                "HD Notification",
+                {"user_to": mentioned, "notification_type": "Mention"},
+            )
+
+        before = mentions()
+        frappe.set_user(self.other)
+        try:
+            with patch("frappe.sendmail") as sendmail:
+                merge_ticket(source=self.ticket.name, target=target.name)
+        finally:
+            frappe.set_user("Administrator")
+
+        self.assertEqual(before, 1)
+        self.assertEqual(mentions(), before)
+        recipients = [call.kwargs.get("recipients") for call in sendmail.call_args_list]
+        self.assertNotIn(mentioned, recipients)
 
     def test_data_import_keeps_author(self):
         note = insert_as_data_import(
