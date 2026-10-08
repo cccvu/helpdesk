@@ -965,3 +965,17 @@ def make_mention_html(agent: str | None, label: str = "Agent") -> str:
         f'<span class="mention" data-type="mention"{data_id} '
         f'data-label="{label}">@{label}</span>'
     )
+
+
+def rename_doc_as(user: str, doctype: str, old_name: str, new_name: str):
+    """Rename a document as `user` through frappe.client.rename_doc, which
+    validates the rename (write permission, allow_rename, name rules).
+    Restores the previous user."""
+    from frappe.client import rename_doc
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return rename_doc(doctype, old_name, new_name)
+    finally:
+        frappe.set_user(previous)

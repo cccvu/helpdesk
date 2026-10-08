@@ -164,14 +164,33 @@ def validate_action(action_type: str, value: str) -> None:
         )
 
 
-def has_permission(doc, user=None):
+def has_permission(doc, ptype=None, user=None):
+    """Who may use a saved reply.
+
+    Judged by the stored reply's owner and scope, so a save can't change
+    what is checked; duplicating a reply the user can read still works. A
+    reply with no name yet (a new one, or an upload to an unsaved one) is the
+    session user's; a named reply that isn't stored may only be created.
+    """
     if not user:
         user = frappe.session.user
 
     user_roles = frappe.get_roles(user)
-    is_user_admin = "System Manager" in user_roles or "Agent Manager" in user_roles
+    if "System Manager" in user_roles or "Agent Manager" in user_roles:
+        return True
 
-    if doc.owner == user or is_user_admin:
+    if not doc.name:
+        return True
+
+    stored = frappe.db.get_value(
+        "HD Saved Reply", doc.name, ["name", "owner", "scope"], as_dict=True
+    )
+    if not stored:
+        if ptype != "create":
+            return False
+        stored = doc
+
+    if (stored.owner or "").lower() == user.lower():
         return True
 
     is_team_restriction_applied = frappe.db.get_single_value(
@@ -181,7 +200,7 @@ def has_permission(doc, user=None):
         "HD Settings", "disable_saved_replies_global_scope"
     )
 
-    scope = doc.scope
+    scope = stored.scope
 
     if scope == "Global":
         if not is_global_scope_disabled:
@@ -198,7 +217,7 @@ def has_permission(doc, user=None):
 
             exists = frappe.db.exists(
                 "HD Saved Reply Team",
-                {"parent": doc.name, "team": ["in", user_team_names]},
+                {"parent": stored.name, "team": ["in", user_team_names]},
             )
             return bool(exists)
 
