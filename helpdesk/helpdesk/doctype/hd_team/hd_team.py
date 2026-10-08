@@ -62,7 +62,6 @@ class HDTeam(Document):
                 force=True,
                 ignore_on_trash=True,
             )
-            frappe.db.commit()
         except DoesNotExistError:
             frappe.log_error(
                 title="Assignment Rule not found",

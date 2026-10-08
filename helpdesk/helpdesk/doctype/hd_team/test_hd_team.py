@@ -427,3 +427,33 @@ class TestHDTeamNames(FrappeTestCase):
         self.assertEqual(
             frappe.db.get_value("HD Team", legacy, "ignore_restrictions"), 1
         )
+
+
+class TestHDTeamDelete(FrappeTestCase):
+    def setUp(self):
+        frappe.set_user("Administrator")
+        self.agent = make_agent("team_delete_agent@example.com")
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+        for ticket in frappe.get_all(
+            "HD Ticket", filters={"agent_group": "Test Delete Linked"}, pluck="name"
+        ):
+            frappe.delete_doc("HD Ticket", ticket, force=True, ignore_permissions=True)
+        if frappe.db.exists("HD Team", "Test Delete Linked"):
+            frappe.delete_doc(
+                "HD Team", "Test Delete Linked", force=True, ignore_permissions=True
+            )
+
+    def test_failed_delete_keeps_the_assignment_rule(self):
+        team = make_team("Test Delete Linked", [self.agent], disabled=True)
+        make_ticket(agent_group=team.name)
+        state = get_team_rule_state(team.name)
+
+        frappe.db.savepoint("team_delete_linked")
+        with self.assertRaises(frappe.LinkExistsError):
+            frappe.delete_doc("HD Team", team.name)
+        frappe.db.rollback(save_point="team_delete_linked")
+
+        self.assertTrue(frappe.db.exists("HD Team", team.name))
+        self.assertEqual(get_team_rule_state(team.name), state)
