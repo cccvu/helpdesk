@@ -55,6 +55,7 @@ from helpdesk.test_utils import (
     update_role_in_customer,
     upload_test_file,
 )
+from helpdesk.utils import is_agent
 
 ERROR_MSG_RESPONSE = "Response time differs by more than 1 second"
 ERROR_MSG_RESOLUTION = "Resolution time differs by more than 1 second"
@@ -2726,6 +2727,18 @@ class TestHDTicket(FrappeTestCase):
         self.assertTrue(has_permission(ticket, user=agent2))
         self.assertFalse(has_permission(ticket, user=agent))
         self.assertNotIn("Team B", permission_query(agent))
+
+    def test_agent_checks_answer_for_passed_user_under_administrator(self):
+        """Run in an Administrator session, the checks answer for the user
+        passed in, not for Administrator."""
+        frappe.set_user("Administrator")
+        ticket = make_ticket(raised_by=agent)
+
+        self.assertFalse(is_agent(non_agent))
+        self.assertTrue(is_agent(agent2))
+        self.assertFalse(has_permission(ticket, user=non_agent))
+        self.assertTrue(has_permission(ticket, user=agent2))
+        self.assertIn(frappe.db.escape(non_agent), permission_query(non_agent))
 
     def test_only_managers_can_delete_a_ticket(self):
         manager = make_agent("ticket_manager@test.com", first_name="Ticket Manager")
