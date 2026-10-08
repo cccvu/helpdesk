@@ -131,6 +131,10 @@ class TestHDNotification(FrappeTestCase):
         self.assertEqual(len(self.mentions(note)), 1)
 
     def test_agent_cannot_create_notifications(self):
+        # the Agent role keeps create; the hook refuses it
+        self.assertTrue(
+            frappe.has_permission("HD Notification", "create", user=self.author)
+        )
         with self.assertRaises(frappe.PermissionError):
             insert_as(
                 self.author,
@@ -147,6 +151,13 @@ class TestHDNotification(FrappeTestCase):
                 "HD Notification", {"message": "<p>Inserted by an agent</p>"}
             )
         )
+
+    def test_hook_refuses_agents_every_change(self):
+        own = frappe.get_doc("HD Notification", self.notify(self.author))
+        for ptype in ("create", "write", "delete", "share"):
+            with self.subTest(ptype=ptype):
+                self.assertFalse(has_permission(own, ptype=ptype, user=self.author))
+        self.assertTrue(has_permission(own, ptype="read", user=self.author))
 
     def test_agent_cannot_change_or_share_notifications(self):
         own = self.notify(self.author)

@@ -70,7 +70,9 @@ class HDNotification(Document):
 
 
 # Notifications are made by server code (mentions, assignments, reactions),
-# which inserts them with ignore_permissions.
+# which inserts them with ignore_permissions. The Agent DocPerm row keeps
+# create so the previous release's mentions code, which inserts as the agent,
+# works during a rolling deploy or after a rollback; this hook refuses it.
 SERVER_ONLY = ("create", "write", "delete", "share", "submit", "cancel", "amend")
 
 
