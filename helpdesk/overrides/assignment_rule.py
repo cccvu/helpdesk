@@ -1,5 +1,6 @@
 import frappe
 from frappe.automation.doctype.assignment_rule.assignment_rule import AssignmentRule
+from frappe.utils import escape_html
 
 
 def get_agents_by_category(category: str) -> set[str]:
@@ -21,6 +22,22 @@ def get_agents_by_category(category: str) -> set[str]:
 
 
 class HelpdeskAssignmentRule(AssignmentRule):
+    def safe_eval(self, fieldname, doc):
+        """Frappe's safe_eval, but the error is shown as text: a condition's
+        error message can carry markup, and msgprint renders HTML."""
+        try:
+            if self.get(fieldname):
+                return frappe.safe_eval(self.get(fieldname), None, doc)
+        except Exception as e:
+            # when assignment fails, don't block the document as it may be
+            # a part of the email pulling
+            frappe.msgprint(
+                frappe._("Auto assignment failed: {0}").format(escape_html(str(e))),
+                indicator="orange",
+            )
+
+        return False
+
     def get_user(self, doc):
         """
         Override get_user method from framework.

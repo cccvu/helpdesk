@@ -1,7 +1,11 @@
 # Copyright (c) 2022, Frappe Technologies and contributors
 # For license information, please see license.txt
 
+import json
+import unicodedata
+
 import frappe
+from frappe import _
 from frappe.exceptions import DoesNotExistError
 from frappe.model.document import Document
 from frappe.model.naming import append_number_if_name_exists
@@ -19,7 +23,19 @@ ASSIGNMENT_DAYS = [
 ]
 
 
+# Characters a team name can't hold: they would need escaping in the rule
+# conditions' consumers (the JSON copies, the Helpdesk condition editor, HTML).
+FORBIDDEN_TEAM_NAME_CHARACTERS = frozenset('"\\<>')
+
+
 class HDTeam(Document):
+    def validate(self):
+        if self.is_new():
+            self.validate_team_name(self.name)
+
+    def before_rename(self, olddn, newdn, merge=False):
+        self.validate_team_name(newdn)
+
     def after_insert(self):
         self.create_assignment_rule()
         self.capture_team_creation_event()
@@ -46,7 +62,6 @@ class HDTeam(Document):
                 force=True,
                 ignore_on_trash=True,
             )
-            frappe.db.commit()
         except DoesNotExistError:
             frappe.log_error(
                 title="Assignment Rule not found",
@@ -105,16 +120,48 @@ class HDTeam(Document):
         if self.name not in ["Product Experts", "Billing"]:
             capture_event("team_created")
 
-    def assign_condition(self, team_name: str) -> tuple[str, str]:
-        condition = f"status == 'Open' and agent_group == '{team_name}'"
-        condition_json = (
-            f'[["status","==","Open"],"and",["agent_group","==","{team_name}"]]'
+    @staticmethod
+    def validate_team_name(name: str) -> None:
+        """Refuse a team name that can't be quoted safely everywhere it goes.
+
+        Apostrophes, curly quotes and accented letters are allowed. The message
+        doesn't repeat the name, which is shown as HTML.
+        """
+        name = str(name)
+        if (
+            any(
+                ch in FORBIDDEN_TEAM_NAME_CHARACTERS or unicodedata.category(ch) == "Cc"
+                for ch in name
+            )
+            or unicodedata.normalize("NFKC", name) != name
+        ):
+            frappe.throw(
+                _(
+                    "A team name can't contain double quotes, backslashes, angle brackets, control characters or characters that Unicode normalization changes, such as full-width letters."
+                ),
+                frappe.InvalidNameError,
+                title=_("Invalid Team Name"),
+            )
+
+    # frappe.safe_eval NFKC-normalizes the code it runs, so repr() isn't enough:
+    # a full-width apostrophe (U+FF07) in a repr()'d name would become a quote
+    # there. ascii() escapes every non-ASCII character, so its literal is
+    # NFKC-stable, and for plain ASCII names it equals the old output.
+    @staticmethod
+    def assign_condition(team_name: str) -> tuple[str, str]:
+        condition = f"status == 'Open' and agent_group == {ascii(team_name)}"
+        condition_json = json.dumps(
+            [["status", "==", "Open"], "and", ["agent_group", "==", team_name]],
+            separators=(",", ":"),
         )
         return condition, condition_json
 
-    def unassign_condition(self, team_name: str) -> tuple[str, str]:
-        condition = f"agent_group != '{team_name}'"
-        condition_json = f'[["agent_group","!=","{team_name}"]]'
+    @staticmethod
+    def unassign_condition(team_name: str) -> tuple[str, str]:
+        condition = f"agent_group != {ascii(team_name)}"
+        condition_json = json.dumps(
+            [["agent_group", "!=", team_name]], separators=(",", ":")
+        )
         return condition, condition_json
 
 

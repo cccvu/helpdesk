@@ -1,5 +1,6 @@
 import frappe
 from frappe import _
+from frappe.utils import escape_html, get_absolute_url
 
 from helpdesk.utils import is_json_valid
 
@@ -18,7 +19,7 @@ def on_assignment_rule_validate(doc, event):
     if doc.assign_condition_json and not is_json_valid(doc.assign_condition_json):
         frappe.throw(
             _("The Assign Condition JSON '{0}' is invalid: </br> {1}").format(
-                doc.assign_condition_json,
+                escape_html(doc.assign_condition_json),
                 "Condition format should be like this e.g [['status','==','open']], it's recommended to use portal view to create conditions.",
             )
         )
@@ -26,7 +27,7 @@ def on_assignment_rule_validate(doc, event):
     if doc.unassign_condition_json and not is_json_valid(doc.unassign_condition_json):
         frappe.throw(
             _("The Unassign Condition JSON '{0}' is invalid: </br> {1}").format(
-                doc.unassign_condition_json,
+                escape_html(doc.unassign_condition_json),
                 "Condition format should be like this e.g [['status','==','open']], it's recommended to use portal view to create conditions.",
             )
         )
@@ -51,26 +52,20 @@ def validate_users(doc):
     msg = _(
         "This Assignment Rule is linked to the Team {0}.</br> User {1} is added in the Assignment Rule but not in the linked Team. Please add the user in the {2} to ensure proper team structure."
     )
+    team_link = (
+        f'<a href="{escape_html(get_absolute_url("HD Team", team_name))}">'
+        f"<b>{escape_html(team_name)}</b></a>"
+    )
 
     if doc.rule == "Weighted Distribution":
         users = [u.user for u in doc.weighted_users if u.user]
-        for user in users:
-            if user not in team_agents:
-                frappe.msgprint(
-                    msg.format(
-                        f"<a href='/app/hd-team/{team_name}'><b>{team_name}</b></a>",
-                        f"<u>{user}</u>",
-                        f"<a href='/app/hd-team/{team_name}'><b>{team_name}</b></a>",
-                    )
-                )
-
     elif doc.rule == "Round Robin" or doc.rule == "Load Balancing":
-        for user in doc.users:
-            if user.user not in team_agents:
-                frappe.msgprint(
-                    msg.format(
-                        f"<a href='/app/hd-team/{team_name}'><b>{team_name}</b></a>",
-                        f"<u>{user.user}</u>",
-                        f"<a href='/app/hd-team/{team_name}'><b>{team_name}</b></a>",
-                    )
-                )
+        users = [u.user for u in doc.users]
+    else:
+        return
+
+    for user in users:
+        if user not in team_agents:
+            frappe.msgprint(
+                msg.format(team_link, f"<u>{escape_html(user)}</u>", team_link)
+            )

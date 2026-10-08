@@ -146,6 +146,16 @@ ignore_links_on_delete = [
     "HD Ticket Comment",
 ]
 
+# Requests
+# ---------------
+# Interim backport of frappe/frappe#44068 that also ignores a client's force,
+# in Document.rename and frappe.rename_doc: drop with
+# helpdesk/overrides/document.py.
+before_request = ["helpdesk.overrides.document.ignore_client_validate_rename"]
+override_whitelisted_methods = {
+    "frappe.rename_doc": "helpdesk.overrides.document.rename_doc",
+}
+
 # setup wizard
 # setup_wizard_requires = "assets/helpdesk/js/setup_wizard.js"
 # setup_wizard_stages = "helpdesk.setup.setup_wizard.get_setup_stages"
