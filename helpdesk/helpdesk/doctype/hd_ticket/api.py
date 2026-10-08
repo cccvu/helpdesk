@@ -431,6 +431,8 @@ def duplicate_list_retain_timestamp(doctype, activities: list, target: str, cont
 
         elif doctype == "HD Ticket Comment":
             duplicate_doc.reference_ticket = target
+            # the original's mentions were notified when it was posted
+            duplicate_doc.flags.skip_mention_notifications = True
             attachments = get_attachments(
                 "Communication",
                 activity,

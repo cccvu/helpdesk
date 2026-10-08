@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime
 
 import frappe
@@ -382,18 +383,20 @@ def timeline_node(result: dict, key: str) -> dict | None:
 def add_comment(
     ticket: str,
     content: str = "This is a test comment.",
-    comment_by: str | None = None,
+    commented_by: str | None = None,
     save: bool = True,
 ):
     """
-    Creates a test HD Ticket Comment for a given ticket.
+    Creates a test HD Ticket Comment for a given ticket. A saved comment's
+    author is the session user, whatever `commented_by` says: only inserts
+    that skip permissions keep it.
     """
     comment = frappe.get_doc(
         {
             "doctype": "HD Ticket Comment",
             "reference_ticket": ticket,
             "content": content,
-            "comment_by": comment_by,
+            "commented_by": commented_by,
         }
     )
     if save:
@@ -830,3 +833,149 @@ def get_html_links(html: str) -> list[tuple[list[tuple[str, str | None]], str]]:
     parser.feed(html)
     parser.close()
     return links
+
+
+def delete_doc_as(user: str, doctype: str, name: str):
+    """Delete a document as `user` through frappe.client.delete, which checks
+    delete permission. Restores the previous user."""
+    from frappe.client import delete
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        delete(doctype, name)
+    finally:
+        frappe.set_user(previous)
+
+
+def delete_items_as(user: str, doctype: str, names: list[str]) -> list[str]:
+    """Delete documents as `user` through the list view's bulk delete
+    (frappe.desk.reportview.delete_items). Returns the names it could not
+    delete. delete_bulk commits after each delete and rolls back a failed one;
+    both are patched out here so the test's transaction stays intact. Restores
+    the previous user and form_dict."""
+    import json
+    from unittest.mock import patch
+
+    from frappe.desk.reportview import delete_items
+
+    previous_user = frappe.session.user
+    previous_form = frappe.local.form_dict
+    frappe.set_user(user)
+    frappe.local.form_dict = frappe._dict(doctype=doctype, items=json.dumps(names))
+    try:
+        with patch.object(frappe.db, "commit"), patch.object(frappe.db, "rollback"):
+            return delete_items()
+    finally:
+        frappe.local.form_dict = previous_form
+        frappe.set_user(previous_user)
+
+
+@contextmanager
+def custom_docperm(doctype: str, role: str, **rights):
+    """Within the block, `doctype` uses Custom DocPerms (copied from its
+    DocPerms if it has none, as an HD Settings save or Role Permission Manager
+    does) with `rights` set on `role`'s level-0 row. Restores the rows and
+    clears the permission cache afterwards."""
+    from frappe.permissions import setup_custom_perms
+
+    created = setup_custom_perms(doctype)
+    row = frappe.db.get_value(
+        "Custom DocPerm",
+        {"parent": doctype, "role": role, "permlevel": 0, "if_owner": 0},
+        ["name", *rights],
+        as_dict=True,
+    )
+    frappe.db.set_value("Custom DocPerm", row.name, dict(rights))
+    frappe.clear_cache(doctype=doctype)
+    try:
+        yield
+    finally:
+        if created:
+            frappe.db.delete("Custom DocPerm", {"parent": doctype})
+        else:
+            frappe.db.set_value(
+                "Custom DocPerm", row.name, {right: row[right] for right in rights}
+            )
+        frappe.clear_cache(doctype=doctype)
+
+
+def set_value_as(user: str, doctype: str, name: str, values: dict):
+    """Set `values` on a document as `user` through frappe.client.set_value
+    with a dict, which saves the document and checks write permission.
+    Restores the previous user."""
+    from frappe.client import set_value
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return set_value(doctype, name, values)
+    finally:
+        frappe.set_user(previous)
+
+
+def insert_as(user: str, doc: dict):
+    """Insert `doc` as `user` through frappe.client.insert, which checks create
+    permission (or, for a child row, write on its parent). Returns the inserted
+    document (the parent, for a child row) as a dict and restores the previous
+    user."""
+    from frappe.client import insert
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return insert(doc)
+    finally:
+        frappe.set_user(previous)
+
+
+def share_doc_as(user: str, doctype: str, name: str, with_user: str, **rights):
+    """Share a document with `with_user` (read, plus `rights`) as `user`
+    through frappe.share.add, which checks share permission. Restores the
+    previous user."""
+    from frappe.share import add
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return add(doctype, name, user=with_user, read=1, **rights)
+    finally:
+        frappe.set_user(previous)
+
+
+def insert_as_data_import(doc: dict):
+    """Insert `doc` as the session user the way Data Import's insert mode
+    does: a plain insert with frappe.flags.in_import set. Returns the inserted
+    document."""
+    frappe.flags.in_import = True
+    try:
+        new_doc = frappe.new_doc(doc["doctype"])
+        new_doc.update(doc)
+        return new_doc.insert()
+    finally:
+        frappe.flags.in_import = False
+
+
+def make_mention_html(agent: str | None, label: str = "Agent") -> str:
+    """A mention of `agent` as the agent UI's comment editor writes it: a span
+    whose data-id is the HD Agent's name. With no agent, a span without
+    data-id."""
+    data_id = f' data-id="{agent}"' if agent else ""
+    return (
+        f'<span class="mention" data-type="mention"{data_id} '
+        f'data-label="{label}">@{label}</span>'
+    )
+
+
+def rename_doc_as(user: str, doctype: str, old_name: str, new_name: str):
+    """Rename a document as `user` through frappe.client.rename_doc, which
+    validates the rename (write permission, allow_rename, name rules).
+    Restores the previous user."""
+    from frappe.client import rename_doc
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return rename_doc(doctype, old_name, new_name)
+    finally:
+        frappe.set_user(previous)

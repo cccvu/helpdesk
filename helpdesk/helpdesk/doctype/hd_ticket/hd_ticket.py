@@ -47,6 +47,7 @@ from helpdesk.utils import (
     get_doc_room,
     is_admin,
     is_agent,
+    is_agent_manager,
     publish_event,
 )
 
@@ -1455,8 +1456,12 @@ class HDTicket(Document):
 # Check if `user` has access to this specific ticket (`doc`). This implements extra
 # permission checks which is not possible with standard permission system. This function
 # is being called from hooks. `doc` is the ticket to check against
-def has_permission(doc, user=None):
+def has_permission(doc, user=None, ptype=None):
     user = user or frappe.session.user
+    # Only managers delete tickets, whatever the DocPerms (HD Settings copies them
+    # into Custom DocPerms) say. Checked before the requester and owner grants below.
+    if ptype == "delete" and not is_agent_manager(user):
+        return False
     if is_admin(user):
         return True
     if user in (doc.contact, doc.raised_by, doc.owner):

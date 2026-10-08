@@ -14,7 +14,10 @@ from helpdesk.test_utils import (
     create_contact,
     create_customer,
     create_user,
+    custom_docperm,
     get_invitation,
+    make_agent,
+    make_agent_manager,
     make_ticket,
     update_role_in_customer,
 )
@@ -365,6 +368,36 @@ class TestHDCustomer(FrappeTestCase):
         invitation.reload()
         self.assertIsNone(invitation.customer)
         self.assertTrue(frappe.db.exists("Contact", contact["contact"]))
+
+    def test_only_managers_delete_a_customers_tickets(self) -> None:
+        from helpdesk.api.customer import delete_customer
+
+        # an agent who may delete customers, on a site whose Custom DocPerms
+        # still give the Agent role ticket delete
+        user = make_agent("delete-customer-agent@example.com")
+        frappe.get_doc("User", user).add_roles("HD Customer Manager")
+        manager = make_agent_manager("delete-customer-manager@example.com")
+
+        with custom_docperm("HD Ticket", "Agent", delete=1):
+            _, customer, ticket, _ = self.setup_customer_for_delete(
+                "Test Customer Agent Delete", "delete-customer-agent-c@example.com"
+            )
+            frappe.set_user(user)
+            try:
+                with self.assertRaises(frappe.PermissionError):
+                    delete_customer(customer.name, delete_tickets=True)
+            finally:
+                frappe.set_user("Administrator")
+            self.assertTrue(frappe.db.exists("HD Customer", customer.name))
+            self.assertTrue(frappe.db.exists("HD Ticket", ticket.name))
+
+            frappe.set_user(manager)
+            try:
+                delete_customer(customer.name, delete_tickets=True)
+            finally:
+                frappe.set_user("Administrator")
+            self.assertFalse(frappe.db.exists("HD Customer", customer.name))
+            self.assertFalse(frappe.db.exists("HD Ticket", ticket.name))
 
     def setup_customer_for_delete(self, customer_name: str, email: str):
         for inv in frappe.db.get_all("User Invitation", {"email": email}, pluck="name"):

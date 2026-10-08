@@ -25,7 +25,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-04-09 03:08:25.416283",
+ "modified": "2026-10-08 12:00:00.000000",
  "modified_by": "sanjay@erpnext.com",
  "module": "Helpdesk",
  "name": "HD Ticket Activity",
@@ -46,15 +46,12 @@
   },
   {
    "create": 1,
-   "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Agent",
-   "share": 1,
-   "write": 1
+   "role": "Agent"
   }
  ],
  "row_format": "Dynamic",

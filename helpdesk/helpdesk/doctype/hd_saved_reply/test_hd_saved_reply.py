@@ -2,9 +2,11 @@
 # See license.txt
 
 import frappe
+from frappe.client import get as client_get
 from frappe.tests.utils import FrappeTestCase
 
-from helpdesk.test_utils import make_team
+from helpdesk.helpdesk.doctype.hd_saved_reply.hd_saved_reply import has_permission
+from helpdesk.test_utils import insert_as, make_team, rename_doc_as, set_value_as
 
 # Test user emails
 AGENT1 = "saved_reply_agent1@test.com"
@@ -568,6 +570,97 @@ class TestHDSavedReply(FrappeTestCase):
         self.assertNotIn(personal_agent2.name, replies)
         self.assertIn(team_a_reply.name, replies)
         self.assertNotIn(team_b_reply.name, replies)
+
+    # ==========================================================================
+    # STORED OWNER AND SCOPE TESTS
+    # ==========================================================================
+
+    def stored(self, name: str) -> dict:
+        return frappe.db.get_value(
+            "HD Saved Reply", name, ["owner", "scope", "message"], as_dict=True
+        )
+
+    def test_non_owner_cannot_change_personal_reply(self):
+        reply = make_saved_reply(
+            "Agent1 Private", "Private message", scope="Personal", owner=AGENT1
+        )
+        before = self.stored(reply.name)
+        changes = {
+            "owner": {"owner": AGENT2},
+            "team scope": {"scope": "Team"},
+            "global scope": {"scope": "Global"},
+        }
+        for case, values in changes.items():
+            with self.subTest(case=case):
+                with self.assertRaises(frappe.PermissionError):
+                    set_value_as(AGENT2, "HD Saved Reply", reply.name, values)
+                self.assertEqual(self.stored(reply.name), before)
+
+    def test_non_owner_cannot_rename_personal_reply(self):
+        reply = make_saved_reply(
+            "Agent1 Named", "Private message", scope="Personal", owner=AGENT1
+        )
+        with self.assertRaises((frappe.PermissionError, frappe.ValidationError)):
+            rename_doc_as(AGENT2, "HD Saved Reply", reply.name, "Renamed Reply")
+
+        self.assertTrue(frappe.db.exists("HD Saved Reply", reply.name))
+        self.assertFalse(frappe.db.exists("HD Saved Reply", "Renamed Reply"))
+        self.assertEqual(self.stored(reply.name).owner, AGENT1)
+
+    def test_reply_that_does_not_exist_is_refused(self):
+        doc = frappe.get_doc(
+            {
+                "doctype": "HD Saved Reply",
+                "name": "No Such Reply",
+                "title": "No Such Reply",
+                "owner": AGENT2,
+                "scope": "Personal",
+            }
+        )
+        for ptype in ("read", "write", "delete"):
+            with self.subTest(ptype=ptype):
+                self.assertFalse(has_permission(doc, ptype=ptype, user=AGENT2))
+        self.assertTrue(has_permission(doc, ptype="create", user=AGENT2))
+
+    def test_duplicate_of_global_reply_is_owned_by_duplicator(self):
+        """As the saved replies list duplicates a reply."""
+        reply = make_saved_reply("Global Original", "Shared message", scope="Global")
+        frappe.set_user(AGENT2)
+        data = client_get("HD Saved Reply", reply.name)
+        frappe.set_user("Administrator")
+
+        copy = insert_as(AGENT2, {**data, "title": "Global Duplicate"})
+
+        self.assertEqual(copy["name"], "Global Duplicate")
+        self.assertEqual(self.stored("Global Duplicate").owner, AGENT2)
+        self.assertEqual(self.stored(reply.name).owner, ADMIN_AGENT)
+
+    def test_upload_to_unsaved_reply_is_allowed(self):
+        from frappe.handler import check_write_permission
+
+        frappe.set_user(AGENT2)
+        check_write_permission("HD Saved Reply", "new-hd-saved-reply-1")
+
+    def test_owner_can_rescope_reply(self):
+        reply = make_saved_reply(
+            "Agent1 Promoted", "Message", scope="Personal", owner=AGENT1
+        )
+        set_value_as(AGENT1, "HD Saved Reply", reply.name, {"scope": "Global"})
+        self.assertEqual(self.stored(reply.name).scope, "Global")
+
+    def test_owner_match_ignores_case(self):
+        reply = make_saved_reply(
+            "Agent1 Upper", "Message", scope="Personal", owner=AGENT1.upper()
+        )
+        frappe.set_user(AGENT1)
+        self.assertTrue(frappe.has_permission("HD Saved Reply", "write", doc=reply))
+
+    def test_non_owner_can_edit_global_reply(self):
+        reply = make_saved_reply(
+            "Agent1 Global", "Original", scope="Global", owner=AGENT1
+        )
+        set_value_as(AGENT2, "HD Saved Reply", reply.name, {"message": "Edited"})
+        self.assertEqual(self.stored(reply.name).message, "Edited")
 
     def tearDown(self):
         frappe.set_user("Administrator")

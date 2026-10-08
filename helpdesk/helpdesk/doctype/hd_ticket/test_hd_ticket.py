@@ -9,6 +9,7 @@ from html import escape, unescape
 from unittest.mock import patch
 
 import frappe
+from frappe.cache_manager import clear_doctype_map
 from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.email.email_body import EMBED_PATTERN
 from frappe.tests.utils import FrappeTestCase
@@ -34,10 +35,15 @@ from helpdesk.test_utils import (
     add_holiday,
     create_contact,
     create_customer,
+    create_user,
+    custom_docperm,
+    delete_doc_as,
+    delete_items_as,
     get_current_week_monday,
     get_latest_ticket_communication,
     get_priority_response_resolution_time,
     make_agent,
+    make_agent_manager,
     make_priority,
     make_private_file,
     make_sla,
@@ -49,6 +55,7 @@ from helpdesk.test_utils import (
     update_role_in_customer,
     upload_test_file,
 )
+from helpdesk.utils import is_agent
 
 ERROR_MSG_RESPONSE = "Response time differs by more than 1 second"
 ERROR_MSG_RESOLUTION = "Resolution time differs by more than 1 second"
@@ -2721,6 +2728,32 @@ class TestHDTicket(FrappeTestCase):
         self.assertFalse(has_permission(ticket, user=agent))
         self.assertNotIn("Team B", permission_query(agent))
 
+    def test_agent_checks_answer_for_passed_user_under_administrator(self):
+        """Run in an Administrator session, the checks answer for the user
+        passed in, not for Administrator."""
+        frappe.set_user("Administrator")
+        ticket = make_ticket(raised_by=agent)
+
+        self.assertFalse(is_agent(non_agent))
+        self.assertTrue(is_agent(agent2))
+        self.assertFalse(has_permission(ticket, user=non_agent))
+        self.assertTrue(has_permission(ticket, user=agent2))
+        self.assertIn(frappe.db.escape(non_agent), permission_query(non_agent))
+
+    def test_only_managers_can_delete_a_ticket(self):
+        manager = make_agent("ticket_manager@test.com", first_name="Ticket Manager")
+        frappe.get_doc("User", manager).add_roles("Agent Manager")
+        ticket = make_ticket(raised_by=non_agent)
+
+        frappe.set_user(agent)
+        with self.assertRaises(frappe.PermissionError):
+            frappe.delete_doc("HD Ticket", ticket.name)
+
+        frappe.set_user(manager)
+        frappe.delete_doc("HD Ticket", ticket.name)
+        self.assertFalse(frappe.db.exists("HD Ticket", ticket.name))
+        frappe.set_user("Administrator")
+
     def test_agent_creates_ticket_for_requester(self):
         frappe.set_user(agent)
         ticket = new(
@@ -2987,3 +3020,95 @@ class TestMergeKeepsCustomFlags(FrappeTestCase):
         merge_ticket(source=source.name, target=target.name)
 
         self.assertEqual(frappe.db.get_value("HD Ticket", target.name, MERGE_FLAG), 1)
+
+
+class TestTicketDeleteRights(FrappeTestCase):
+    """Only Agent Managers, System Managers and Administrator delete tickets,
+    whatever the DocPerms or Custom DocPerms grant the Agent role."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # an earlier class's rolled-back teams can leave their rules cached
+        clear_doctype_map("Assignment Rule", "HD Ticket")
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        self.agent = make_agent("delete_rights_agent@example.com")
+        self.manager = make_agent_manager("delete_rights_manager@example.com")
+        self.system_manager = make_agent("delete_rights_sysman@example.com")
+        frappe.get_doc("User", self.system_manager).add_roles("System Manager")
+        self.requester = create_user("delete_rights_requester@example.com").name
+        self.ticket = make_ticket(raised_by=self.requester).name
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def assertAgentCannotDelete(self):
+        with self.assertRaises(frappe.PermissionError):
+            delete_doc_as(self.agent, "HD Ticket", self.ticket)
+        self.assertTrue(frappe.db.exists("HD Ticket", self.ticket))
+
+        frappe.set_user(self.agent)
+        try:
+            with self.assertRaises(frappe.PermissionError):
+                frappe.delete_doc("HD Ticket", self.ticket)
+        finally:
+            frappe.set_user("Administrator")
+        self.assertTrue(frappe.db.exists("HD Ticket", self.ticket))
+
+        undeleted = delete_items_as(self.agent, "HD Ticket", [self.ticket])
+        self.assertEqual(undeleted, [self.ticket])
+        self.assertTrue(frappe.db.exists("HD Ticket", self.ticket))
+
+    def test_agent_cannot_delete_ticket(self):
+        self.assertAgentCannotDelete()
+
+    def test_agent_cannot_delete_ticket_when_custom_perms_allow_it(self):
+        with custom_docperm("HD Ticket", "Agent", delete=1):
+            self.assertTrue(
+                frappe.has_permission("HD Ticket", "delete", user=self.agent)
+            )
+            self.assertAgentCannotDelete()
+
+    def test_share_does_not_grant_delete(self):
+        frappe.share.add_docshare(
+            "HD Ticket",
+            self.ticket,
+            self.agent,
+            read=1,
+            write=1,
+            share=1,
+            flags={"ignore_share_permission": True},
+        )
+        with custom_docperm("HD Ticket", "Agent", delete=1):
+            self.assertAgentCannotDelete()
+
+    def test_managers_can_delete_tickets(self):
+        for user in (self.manager, self.system_manager, "Administrator"):
+            with self.subTest(user=user):
+                ticket = make_ticket(raised_by=self.requester).name
+                delete_doc_as(user, "HD Ticket", ticket)
+                self.assertFalse(frappe.db.exists("HD Ticket", ticket))
+
+        ticket = make_ticket(raised_by=self.requester).name
+        self.assertFalse(delete_items_as(self.manager, "HD Ticket", [ticket]))
+        self.assertFalse(frappe.db.exists("HD Ticket", ticket))
+
+    def test_requester_and_owner_cannot_delete(self):
+        ticket = frappe.get_doc("HD Ticket", self.ticket)
+        owner = create_user("delete_rights_owner@example.com").name
+        ticket.owner = owner
+
+        for user in (self.requester, owner):
+            with self.subTest(user=user):
+                self.assertTrue(has_permission(ticket, user=user, ptype="read"))
+                self.assertFalse(has_permission(ticket, user=user, ptype="delete"))
+
+    def test_other_checks_are_unchanged(self):
+        ticket = frappe.get_doc("HD Ticket", self.ticket)
+        self.assertTrue(has_permission(ticket, user=self.agent))
+        for ptype in ("read", "write", "create", "share"):
+            with self.subTest(ptype=ptype):
+                self.assertTrue(has_permission(ticket, user=self.agent, ptype=ptype))
+        self.assertTrue(has_permission(ticket, user=self.manager, ptype="delete"))
