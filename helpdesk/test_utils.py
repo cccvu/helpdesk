@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime
 
 import frappe
@@ -830,3 +831,68 @@ def get_html_links(html: str) -> list[tuple[list[tuple[str, str | None]], str]]:
     parser.feed(html)
     parser.close()
     return links
+
+
+def delete_doc_as(user: str, doctype: str, name: str):
+    """Delete a document as `user` through frappe.client.delete, which checks
+    delete permission. Restores the previous user."""
+    from frappe.client import delete
+
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        delete(doctype, name)
+    finally:
+        frappe.set_user(previous)
+
+
+def delete_items_as(user: str, doctype: str, names: list[str]) -> list[str]:
+    """Delete documents as `user` through the list view's bulk delete
+    (frappe.desk.reportview.delete_items). Returns the names it could not
+    delete. delete_bulk commits after each delete and rolls back a failed one;
+    both are patched out here so the test's transaction stays intact. Restores
+    the previous user and form_dict."""
+    import json
+    from unittest.mock import patch
+
+    from frappe.desk.reportview import delete_items
+
+    previous_user = frappe.session.user
+    previous_form = frappe.local.form_dict
+    frappe.set_user(user)
+    frappe.local.form_dict = frappe._dict(doctype=doctype, items=json.dumps(names))
+    try:
+        with patch.object(frappe.db, "commit"), patch.object(frappe.db, "rollback"):
+            return delete_items()
+    finally:
+        frappe.local.form_dict = previous_form
+        frappe.set_user(previous_user)
+
+
+@contextmanager
+def custom_docperm(doctype: str, role: str, **rights):
+    """Within the block, `doctype` uses Custom DocPerms (copied from its
+    DocPerms if it has none, as an HD Settings save or Role Permission Manager
+    does) with `rights` set on `role`'s level-0 row. Restores the rows and
+    clears the permission cache afterwards."""
+    from frappe.permissions import setup_custom_perms
+
+    created = setup_custom_perms(doctype)
+    row = frappe.db.get_value(
+        "Custom DocPerm",
+        {"parent": doctype, "role": role, "permlevel": 0, "if_owner": 0},
+        ["name", *rights],
+        as_dict=True,
+    )
+    frappe.db.set_value("Custom DocPerm", row.name, dict(rights))
+    frappe.clear_cache(doctype=doctype)
+    try:
+        yield
+    finally:
+        if created:
+            frappe.db.delete("Custom DocPerm", {"parent": doctype})
+        else:
+            frappe.db.set_value(
+                "Custom DocPerm", row.name, {right: row[right] for right in rights}
+            )
+        frappe.clear_cache(doctype=doctype)

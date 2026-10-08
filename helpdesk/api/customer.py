@@ -1,7 +1,9 @@
 import frappe
+from frappe import _
 from frappe.model.document import Document
 
 from helpdesk.api.contact import create_contact
+from helpdesk.utils import is_agent_manager
 
 
 @frappe.whitelist()
@@ -68,4 +70,8 @@ def delete_customer(name: str, delete_tickets: bool = False) -> None:
     frappe.has_permission("HD Customer", "delete", throw=True)
     permission = "delete" if delete_tickets else "write"
     frappe.has_permission("HD Ticket", permission, throw=True)
+    # the tickets are deleted with ignore_permissions, so check what the
+    # ticket's own permission hook would
+    if delete_tickets and not is_agent_manager():
+        frappe.throw(_("Only managers can delete tickets."), frappe.PermissionError)
     frappe.delete_doc("HD Customer", name, flags={"delete_tickets": delete_tickets})
