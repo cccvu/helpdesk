@@ -800,3 +800,33 @@ def get_team_rule_state(team_name: str) -> dict:
         "users": sorted(row.user for row in rule.users),
         "priority": rule.priority,
     }
+
+
+def get_html_links(html: str) -> list[tuple[list[tuple[str, str | None]], str]]:
+    """Every <a> element in `html`, as (its attributes, its text), parsed the
+    way a browser would read them: attribute values and text are unescaped."""
+    from html.parser import HTMLParser
+
+    links = []
+
+    class LinkParser(HTMLParser):
+        depth = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                links.append((attrs, ""))
+                self.depth += 1
+
+        def handle_endtag(self, tag):
+            if tag == "a" and self.depth:
+                self.depth -= 1
+
+        def handle_data(self, data):
+            if self.depth:
+                attrs, text = links[-1]
+                links[-1] = (attrs, text + data)
+
+    parser = LinkParser()
+    parser.feed(html)
+    parser.close()
+    return links
