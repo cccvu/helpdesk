@@ -383,6 +383,10 @@ async function resolveExcelStyles(html: string): Promise<ResolvedExcelPaste> {
     const iframe = document.createElement("iframe");
     iframe.style.cssText =
       "position:fixed;top:-9999px;left:-9999px;width:2000px;height:2000px;visibility:hidden;";
+    // Nothing in the pasted document runs; the parent still reads its
+    // computed styles. Set before appending: the flags apply when the frame's
+    // first document is created.
+    iframe.setAttribute("sandbox", "allow-same-origin");
     document.body.appendChild(iframe);
 
     const iframeDoc = iframe.contentDocument!;
