@@ -268,13 +268,23 @@ def remove_holidays():
     holiday_list.save()
 
 
-def create_field_dependency():
-    parent_field = "ticket_type"
-    child_field = "priority"
-    mapping = '{"Unspecified":["Urgent","High"],"Question":["Medium","High"],"Bug":["Medium"],"Incident":["Urgent","High","Medium","Low"]}'
-    enabled = 1
-    fields_criteria = '{"display":{"enabled":true,"value":[{"label":"Any","value":"Any"}]},"mandatory":{"enabled":true,"value":[{"label":"Question","value":"Question"},{"label":"Bug","value":"Bug"}]}}'
+DEFAULT_FIELD_DEPENDENCY_MAPPING = '{"Unspecified":["Urgent","High"],"Question":["Medium","High"],"Bug":["Medium"],"Incident":["Urgent","High","Medium","Low"]}'
+DEFAULT_FIELD_DEPENDENCY_CRITERIA = '{"display":{"enabled":true,"value":[{"label":"Any","value":"Any"}]},"mandatory":{"enabled":true,"value":[{"label":"Question","value":"Question"},{"label":"Bug","value":"Bug"}]}}'
 
+
+def create_field_dependency(
+    parent_field: str = "ticket_type",
+    child_field: str = "priority",
+    mapping: str = DEFAULT_FIELD_DEPENDENCY_MAPPING,
+    fields_criteria: str = DEFAULT_FIELD_DEPENDENCY_CRITERIA,
+    enabled: int = 1,
+):
+    """Save a field dependency the way the settings page does.
+
+    `mapping` and `fields_criteria` are JSON strings, as the page sends them.
+    The defaults make ticket type drive priority, with display and mandatory
+    criteria set, so the field gets a form customization too.
+    """
     create_update_field_dependency(
         parent_field, child_field, mapping, enabled, fields_criteria
     )

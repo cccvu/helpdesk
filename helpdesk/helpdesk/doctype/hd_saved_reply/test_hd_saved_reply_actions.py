@@ -1,6 +1,7 @@
 # Copyright (c) 2026, Frappe Technologies and Contributors
 # See license.txt
 
+import html
 import json
 
 import frappe
@@ -53,7 +54,7 @@ class TestHDSavedReplyActions(FrappeTestCase):
     def tearDownClass(cls):
         super().tearDownClass()
         # The team's assignment rule is rolled back, its cached name is not
-        clear_doctype_map("Assignment Rule", "*")
+        clear_doctype_map("Assignment Rule", "HD Ticket")
 
     def setUp(self):
         frappe.set_user("Administrator")
@@ -307,3 +308,127 @@ class TestHDSavedReplyActions(FrappeTestCase):
         self.assertEqual(len(result["applied"]), 1)
         ticket.reload()
         self.assertEqual(ticket.priority, "Low")
+
+
+def make_saved_reply_with_message(title, message):
+    doc = frappe.get_doc(
+        {
+            "doctype": "HD Saved Reply",
+            "title": title,
+            "message": message,
+            "scope": "Global",
+        }
+    )
+    doc.insert(ignore_permissions=True)
+    return doc
+
+
+class TestSavedReplyPlaceholders(FrappeTestCase):
+    """A saved reply's `{{ field }}` placeholders are filled as text from the
+    ticket and the signed-in user; everything else in it stays as written."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        make_agent(AGENT)
+        frappe.get_doc("User", AGENT).add_roles("Agent")
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        frappe.db.delete("HD Saved Reply")
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def render(self, message, **ticket_fields):
+        reply = make_saved_reply_with_message("Placeholders", message)
+        ticket = make_ticket(**ticket_fields)
+        frappe.set_user(AGENT)
+        try:
+            rendered = get_rendered_saved_reply(
+                ticket_id=ticket.name, saved_reply_id=reply.name
+            )
+        finally:
+            frappe.set_user("Administrator")
+        return rendered["message"], ticket
+
+    def test_ticket_and_user_fields_are_filled(self):
+        message, ticket = self.render(
+            "<p>{{ subject }} / {{ full_name }} / {{ email }}</p>",
+            subject="Printer is down",
+        )
+        full_name = frappe.db.get_value("User", AGENT, "full_name")
+        self.assertEqual(message, f"<p>Printer is down / {full_name} / {AGENT}</p>")
+
+    def test_placeholder_without_spaces_is_filled(self):
+        message, ticket = self.render("{{subject}}", subject="No spaces")
+        self.assertEqual(message, "No spaces")
+
+    def test_name_is_the_ticket(self):
+        message, ticket = self.render("{{ name }}|{{name}}")
+        self.assertEqual(message, f"{ticket.name}|{ticket.name}")
+
+    def test_doc_prefix_reads_the_ticket(self):
+        message, ticket = self.render(
+            "{{ doc.name }}|{{doc.subject}}", subject='<b>x</b> & "y"'
+        )
+        subject = frappe.db.get_value("HD Ticket", ticket.name, "subject")
+        self.assertEqual(
+            message, f"{ticket.name}|{html.escape(html.unescape(subject))}"
+        )
+        self.assertNotIn("<b>", message)
+
+    def test_doc_prefix_does_not_read_user_fields(self):
+        message, ticket = self.render("{{ doc.full_name }}|{{ doc.email }}")
+        self.assertEqual(message, "{{ doc.full_name }}|{{ doc.email }}")
+
+    def test_doc_prefix_with_unknown_or_nested_name_stays_literal(self):
+        text = "{{ doc.not_a_field }} {{ doc.api_key }} {{ doc.owner.name }}"
+        message, ticket = self.render(text)
+        self.assertEqual(message, text)
+
+    def test_unknown_placeholder_stays_literal(self):
+        message, ticket = self.render("Hi {{ not_a_field }}!")
+        self.assertEqual(message, "Hi {{ not_a_field }}!")
+
+    def test_expressions_and_statements_stay_literal(self):
+        text = (
+            "{{ frappe.session.user }} "
+            "{{ frappe.db.get_value('User', 'Administrator', 'name') }} "
+            "{% if 1 %}yes{% endif %} "
+            "{% include 'templates/emails/password_reset.html' %} "
+            "{# note #} {{ 7 * 7 }} {{ subject | upper }}"
+        )
+        message, ticket = self.render(text)
+        self.assertEqual(message, text)
+        self.assertNotIn(AGENT, message)
+        self.assertNotIn("49", message)
+
+    def test_ticket_values_are_escaped(self):
+        message, ticket = self.render("{{ subject }}", subject='<b>x</b> & "y"')
+        self.assertIn("&lt;b&gt;", message)
+        self.assertNotIn("<b>", message)
+        self.assertIn("&amp;", message)
+        self.assertNotIn('"', message)
+
+    def test_rich_text_fields_are_filled_as_plain_text(self):
+        message, ticket = self.render(
+            "{{ description }}", description="<p>Line <strong>one</strong></p>"
+        )
+        self.assertEqual(message, "Line one")
+
+    def test_user_fields_outside_the_list_are_not_filled(self):
+        text = "{{ api_key }} {{ last_ip }} {{ roles }} {{ user_type }}"
+        message, ticket = self.render(text)
+        self.assertEqual(message, text)
+
+    def test_ticket_access_key_is_not_filled(self):
+        text = "{{ key }} {{ doc.key }}"
+        message, ticket = self.render(text)
+        self.assertTrue(ticket.key)
+        self.assertEqual(message, text)
+
+    def test_empty_value_renders_as_empty_text(self):
+        frappe.db.set_value("User", AGENT, "middle_name", None)
+        message, ticket = self.render("[{{ middle_name }}][{{ resolution_details }}]")
+        self.assertEqual(message, "[][]")

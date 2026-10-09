@@ -1,16 +1,35 @@
 import frappe
+from frappe import _
+from frappe.utils import strip_html
 
 from helpdesk.utils import agent_manager_only
 
+# Longest brand name stored; it also becomes the site name in emails.
+BRAND_NAME_MAX_LENGTH = 140
+
 
 @frappe.whitelist(methods=["POST"])
-@agent_manager_only
 def mark_persona_captured(brand_name: str | None = None) -> None:
     """Flag the onboarding persona questionnaire as done so it never re-prompts,
     and adopt the org name as the brand name.
+
+    Only System Managers (and Administrator), who are the users shown the
+    questionnaire, may complete it, and only once: when the flag is already
+    set, nothing is written. The brand name is stored as plain text, without
+    markup or angle brackets, and at most BRAND_NAME_MAX_LENGTH characters.
     """
+    roles = frappe.get_roles()
+    if "System Manager" not in roles and "Administrator" not in roles:
+        frappe.throw(
+            _("Only a System Manager can complete onboarding."),
+            frappe.PermissionError,
+        )
+
+    if frappe.db.get_single_value("HD Settings", "persona_captured"):
+        return
+
     frappe.db.set_single_value("HD Settings", "persona_captured", 1)
-    brand_name = (brand_name or "").strip()
+    brand_name = _clean_brand_name(brand_name)
     if brand_name:
         frappe.db.set_single_value("HD Settings", "brand_name", brand_name)
         frappe.db.set_single_value("Website Settings", "app_name", brand_name)
@@ -19,6 +38,14 @@ def mark_persona_captured(brand_name: str | None = None) -> None:
         # set_single_value skips Website Settings' on_update, so clear the cache
         # ourselves for the new brand to show up in the desk/PWA/app identity.
         frappe.clear_cache()
+
+
+def _clean_brand_name(brand_name: str | None) -> str:
+    """Plain text of the brand name: tags removed, then any remaining angle
+    brackets, trimmed and capped at BRAND_NAME_MAX_LENGTH characters."""
+    text = strip_html(brand_name or "")
+    text = text.replace("<", "").replace(">", "").strip()
+    return text[:BRAND_NAME_MAX_LENGTH].strip()
 
 
 @frappe.whitelist()
