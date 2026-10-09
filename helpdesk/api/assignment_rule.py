@@ -9,9 +9,14 @@ def get_assignment_rules_list():
             frappe.PermissionError,
         )
 
+    # Rules for other documents are System Managers' to manage
+    filters = (
+        {} if "System Manager" in frappe.get_roles() else {"document_type": "HD Ticket"}
+    )
     assignment_rules = frappe.get_list(
         "Assignment Rule",
         fields=["name", "description", "disabled", "priority"],
+        filters=filters,
         order_by="modified desc",
     )
 

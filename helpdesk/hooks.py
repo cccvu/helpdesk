@@ -80,6 +80,7 @@ doc_events = {
         "before_save": "helpdesk.extends.document.sanitize_html_fields",
     },
     "Assignment Rule": {
+        "before_rename": "helpdesk.extends.assignment_rule.on_assignment_rule_before_rename",
         "on_trash": "helpdesk.extends.assignment_rule.on_assignment_rule_trash",
         "validate": "helpdesk.extends.assignment_rule.on_assignment_rule_validate",
     },

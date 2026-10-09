@@ -11,8 +11,10 @@ from frappe.tests.utils import FrappeTestCase
 
 from helpdesk.helpdesk.doctype.hd_team.hd_team import HDTeam, get_team_members
 from helpdesk.test_utils import (
+    create_user,
     delete_team_as,
     get_team_rule_state,
+    insert_as,
     make_agent,
     make_agent_manager,
     make_team,
@@ -300,6 +302,57 @@ class TestHDTeamRights(FrappeTestCase):
         self.assertFalse(frappe.db.exists("HD Team", "Test Rights Renamed"))
         self.assertFalse(frappe.db.exists("Assignment Rule", rule))
 
+    def test_only_system_managers_relink_the_assignment_rule(self):
+        other = make_team("Test Rights Other", [self.agent], disabled=True)
+        other_state = get_team_rule_state(other.name)
+        own_rule = self.rule_state["name"]
+
+        for value in (other.assignment_rule, ""):
+            with self.subTest(value=value):
+                frappe.db.savepoint("team_rights_relink")
+                try:
+                    with self.assertRaisesRegex(
+                        frappe.PermissionError, "System Manager"
+                    ):
+                        update_team_as(self.manager, self.team, assignment_rule=value)
+                finally:
+                    frappe.db.rollback(save_point="team_rights_relink")
+                self.assertTeamUnchanged()
+                self.assertEqual(get_team_rule_state(other.name), other_state)
+
+        system_manager = create_user("team_rights_sm@example.com")
+        system_manager.add_roles("System Manager")
+        update_team_as(
+            system_manager.name, self.team, assignment_rule=other.assignment_rule
+        )
+        self.assertEqual(
+            frappe.db.get_value("HD Team", self.team, "assignment_rule"),
+            other.assignment_rule,
+        )
+        update_team_as(system_manager.name, self.team, assignment_rule=own_rule)
+        self.assertEqual(
+            frappe.db.get_value("HD Team", self.team, "assignment_rule"), own_rule
+        )
+
+    def test_new_team_gets_its_own_assignment_rule(self):
+        other = make_team("Test Rights Other", [self.agent], disabled=True)
+        other_state = get_team_rule_state(other.name)
+
+        insert_as(
+            self.manager,
+            {
+                "doctype": "HD Team",
+                "team_name": "Test Rights Preset",
+                "assignment_rule": other.assignment_rule,
+                "users": [{"user": self.member}],
+            },
+        )
+
+        state = get_team_rule_state("Test Rights Preset")
+        self.assertNotEqual(state["name"], other.assignment_rule)
+        self.assertEqual(state["users"], [self.member])
+        self.assertEqual(get_team_rule_state(other.name), other_state)
+
     def test_team_changes_are_tracked(self):
         def versions():
             return frappe.db.count(
@@ -444,6 +497,45 @@ class TestHDTeamDelete(FrappeTestCase):
             frappe.delete_doc(
                 "HD Team", "Test Delete Linked", force=True, ignore_permissions=True
             )
+
+    def test_delete_keeps_a_rule_for_other_documents(self):
+        """A team deletes its rule with ignore_on_trash, so it deletes only a
+        ticket rule: a rule for other documents is a System Manager's."""
+        team = make_team("Test Delete Linked", [self.agent], disabled=True)
+        own_rule = team.assignment_rule
+        other = frappe.get_doc(
+            {
+                "doctype": "Assignment Rule",
+                "name": "Test Delete Linked User Rule",
+                "document_type": "User",
+                "assign_condition": "1",
+                "rule": "Round Robin",
+                "disabled": 1,
+                "assignment_days": [{"day": "Monday"}],
+            }
+        ).insert()
+        self.addCleanup(
+            frappe.delete_doc,
+            "Assignment Rule",
+            other.name,
+            force=True,
+            ignore_permissions=True,
+            ignore_on_trash=True,
+        )
+        self.addCleanup(
+            frappe.delete_doc,
+            "Assignment Rule",
+            own_rule,
+            force=True,
+            ignore_permissions=True,
+            ignore_on_trash=True,
+        )
+        team.db_set("assignment_rule", other.name)
+
+        frappe.delete_doc("HD Team", team.name)
+
+        self.assertFalse(frappe.db.exists("HD Team", team.name))
+        self.assertTrue(frappe.db.exists("Assignment Rule", other.name))
 
     def test_failed_delete_keeps_the_assignment_rule(self):
         team = make_team("Test Delete Linked", [self.agent], disabled=True)

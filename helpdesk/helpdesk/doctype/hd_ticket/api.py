@@ -825,6 +825,7 @@ def show_outside_hours_banner(ticket_name: str):
         return {"show": False}
 
     ticket = frappe.get_doc("HD Ticket", ticket_name)
+    ticket.check_permission("read")
     is_currently_outside = (
         ticket.is_currently_outside_working_hours()
         and ticket.raised_outside_working_hours
