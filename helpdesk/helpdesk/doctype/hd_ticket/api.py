@@ -15,6 +15,9 @@ from helpdesk.helpdesk.doctype.hd_form_script.hd_form_script import get_form_scr
 from helpdesk.helpdesk.doctype.hd_settings.helpers import get_rendered_banner_msg
 from helpdesk.helpdesk.doctype.hd_ticket_template.api import get_fields_meta
 from helpdesk.helpdesk.doctype.hd_ticket_template.api import get_one as get_template
+from helpdesk.helpdesk.doctype.hd_ticket_template.hd_ticket_template import (
+    allowed_url_method,
+)
 from helpdesk.utils import (
     agent_only,
     check_permissions,
@@ -590,6 +593,8 @@ def get_ticket_customizations():
         fields=["fieldname", "required", "placeholder", "url_method"],
         order_by="idx",
     )
+    for field in custom_fields:
+        field.url_method = allowed_url_method(field.url_method)
     form_scripts = get_form_script("HD Ticket")
     return {"custom_fields": custom_fields, "_form_script": form_scripts}
 

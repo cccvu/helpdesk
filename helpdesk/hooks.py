@@ -159,6 +159,13 @@ override_whitelisted_methods = {
     "frappe.rename_doc": "helpdesk.overrides.document.rename_doc",
 }
 
+# Ticket template options
+# ---------------
+# Dotted paths of whitelisted methods a ticket template field may name in
+# URL/Method to load its options. Every viewer's browser calls the method, so
+# list only reviewed, read-only option providers. Empty turns the feature off.
+helpdesk_ticket_option_methods = []
+
 # setup wizard
 # setup_wizard_requires = "assets/helpdesk/js/setup_wizard.js"
 # setup_wizard_stages = "helpdesk.setup.setup_wizard.get_setup_stages"

@@ -790,6 +790,15 @@ export function parseApiOptions(
   );
 }
 
+// A ticket field's URL/Method, only when it is a dotted method path, so
+// frappe-ui calls it under /api/method/ and never as a raw or absolute URL.
+export function optionsMethod(value: unknown): string | null {
+  return typeof value === "string" &&
+    /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(value)
+    ? value
+    : null;
+}
+
 export function openContact(name: string) {
   const url =
     window.location.origin + "/helpdesk/contacts/" + encodeURIComponent(name);

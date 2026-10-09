@@ -5,6 +5,9 @@ import frappe
 from pypika import JoinType
 
 from helpdesk.helpdesk.doctype.hd_form_script.hd_form_script import get_form_script
+from helpdesk.helpdesk.doctype.hd_ticket_template.hd_ticket_template import (
+    allowed_url_method,
+)
 from helpdesk.utils import check_permissions, get_customers, is_agent
 
 DOCTYPE_TEMPLATE = "HD Ticket Template"
@@ -114,6 +117,9 @@ def get_fields(template: str, fetch: Literal["Custom Field", "DocField"]):
         .orderby(fields.idx)
         .run(as_dict=True)
     )
+    for field in result:
+        field.url_method = allowed_url_method(field.url_method)
+
     docfields = ["link_filters", "depends_on", "mandatory_depends_on", "default"]
 
     for df in docfields:
