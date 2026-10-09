@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Frappe Technologies and Contributors
 # See license.txt
 
+import ast
 import json
 
 import frappe
@@ -333,6 +334,51 @@ class TestFieldDependencyScripts(FrappeTestCase):
             ),
             "eval:['Bug'].includes(doc.ticket_type)",
         )
+
+    def test_criteria_values_are_written_as_quoted_literals(self):
+        # Each chosen value must stay one quoted string in the expression,
+        # whatever characters its name has.
+        prefix, suffix = "eval:", f".includes(doc.{TEST_PARENT})"
+        names = UNUSUAL_VALUES + ["It's", "a\\'b", "']+['", "x\ny", "x\ry", "x\u2029y"]
+        for value in names:
+            with self.subTest(value=value):
+                expression = get_df_expression(
+                    TEST_PARENT,
+                    TEST_CHILD,
+                    {"enabled": True, "value": [{"label": value, "value": value}]},
+                )
+                self.assertTrue(expression.startswith(prefix))
+                self.assertTrue(expression.endswith(suffix))
+                listed = expression[len(prefix) : -len(suffix)]
+                self.assertEqual(ast.literal_eval(listed), [value])
+                for raw in ("\n", "\r", "\u2028", "\u2029"):
+                    self.assertNotIn(raw, listed)
+
+    def test_criteria_with_unusual_values_set_the_child_field_rules(self):
+        criteria = {
+            "display": {
+                "enabled": True,
+                "value": [{"label": v, "value": v} for v in UNUSUAL_VALUES],
+            },
+            "mandatory": {"enabled": False, "value": []},
+        }
+        create_field_dependency(
+            TEST_PARENT,
+            TEST_CHILD,
+            json.dumps({UNUSUAL_VALUES[0]: []}),
+            json.dumps(criteria),
+        )
+        depends_on = frappe.db.get_value(
+            "Property Setter",
+            {
+                "doc_type": "HD Ticket",
+                "field_name": TEST_CHILD,
+                "property": "depends_on",
+            },
+            "value",
+        )
+        listed = depends_on[len("eval:") : -len(f".includes(doc.{TEST_PARENT})")]
+        self.assertEqual(ast.literal_eval(listed), UNUSUAL_VALUES)
 
     def test_an_existing_dependency_is_found_by_its_exact_name(self):
         # "_" matches any character in a LIKE pattern.
