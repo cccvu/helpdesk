@@ -17,6 +17,10 @@ from frappe.utils import add_to_date, get_datetime, getdate, now_datetime
 
 from helpdesk.api.ticket import bulk_reply
 from helpdesk.consts import DEFAULT_SLA
+from helpdesk.helpdesk.doctype.hd_settings.helpers import (
+    default_banner_msg,
+    get_rendered_banner_msg,
+)
 from helpdesk.helpdesk.doctype.hd_ticket.api import (
     merge_ticket,
     new,
@@ -181,6 +185,27 @@ def acknowledgement_on(template: str | None = None):
     finally:
         # rollback is per test class, so restore or later tests inherit this
         frappe.db.set_single_value("HD Settings", previous)
+
+
+@contextmanager
+def hd_settings(**values):
+    """Set HD Settings `values`, and restore them after."""
+    previous = frappe.db.get_value(
+        "HD Settings", "HD Settings", list(values), as_dict=True
+    )
+    frappe.db.set_single_value("HD Settings", values)
+    try:
+        yield
+    finally:
+        # rollback is per test class, so restore or later tests inherit this
+        frappe.db.set_single_value("HD Settings", previous)
+
+
+TEMPLATE_FAILED = "Email template could not be rendered"
+HOSTILE_CONTENT = (
+    '{{ frappe.get_doc({"doctype": "ToDo", "description": "x"}).insert() }}'
+    '{{ frappe.db.get_value("User", "Administrator", "email") }}'
+)
 
 
 def acknowledge_new_ticket(template: str | None):
@@ -1088,6 +1113,38 @@ class TestHDTicket(FrappeTestCase):
             self.assertTrue(ticket.raised_outside_working_hours)
             self.assertTrue(show_outside_hours_banner(ticket.name)["show"])
 
+    def test_banner_needs_read_permission_on_the_ticket(self):
+        with self.freeze_time(get_current_week_monday(hours=8)):
+            ticket = make_ticket(priority="High")
+            try:
+                frappe.set_user(agent)
+                self.assertTrue(show_outside_hours_banner(ticket.name)["show"])
+
+                frappe.set_user(non_agent)
+                with self.assertRaises(frappe.PermissionError):
+                    show_outside_hours_banner(ticket.name)
+            finally:
+                frappe.set_user("Administrator")
+
+    def test_banner_renders_without_a_response_deadline(self):
+        ticket = make_ticket()
+        ticket.db_set("response_by", None)
+        with hd_settings(outside_working_hours_message=""):
+            banner = get_rendered_banner_msg(ticket.name)["banner_msg"]
+        self.assertEqual(
+            banner,
+            frappe.render_template(default_banner_msg, {"next_working_day": None}),
+        )
+
+    def test_banner_message_renders_with_data_only(self):
+        ticket = make_ticket()
+        with hd_settings(outside_working_hours_message="{{ frappe.session.user }}"):
+            banner = get_rendered_banner_msg(ticket.name)["banner_msg"]
+        with hd_settings(outside_working_hours_message=""):
+            default = get_rendered_banner_msg(ticket.name)["banner_msg"]
+        self.assertEqual(banner, default)
+        self.assertTrue(banner.startswith("Thanks for reaching out"))
+
     def test_contact_ticket_visibility(self):
         """
         Test case to validate that contact can only see the tickets raised by them only.
@@ -1562,6 +1619,74 @@ class TestHDTicket(FrappeTestCase):
             ],
             [(ACK_FAILED, "HD Ticket", ticket.name)],
         )
+
+    def test_acknowledgement_content_renders_with_data_only(self):
+        """Content that reaches for anything but the ticket's data is logged
+        against the ticket, and the default content is sent instead."""
+        todos = frappe.db.count("ToDo")
+        before = set(frappe.get_all("Error Log", pluck="name"))
+        with (
+            acknowledgement_on(),
+            hd_settings(acknowledgement_email_content=HOSTILE_CONTENT),
+            patch("frappe.sendmail") as sendmail,
+        ):
+            ticket = make_ticket()
+
+        [sent] = acknowledgements(sendmail)
+        self.assertIn("created a support ticket", sent["message"])
+        self.assertIn(f"<strong>Ticket ID:</strong> {ticket.name}", sent["message"])
+        self.assertNotIn("frappe.", sent["message"])
+        self.assertEqual(frappe.db.count("ToDo"), todos)
+        self.assertEqual(
+            [
+                (log.method, log.reference_doctype, log.reference_name)
+                for log in new_error_logs(before)
+            ],
+            [(TEMPLATE_FAILED, "HD Ticket", ticket.name)],
+        )
+
+    def test_acknowledgement_content_still_renders_ticket_fields(self):
+        content = "<p>{{ doc.name }}: {{ doc.subject }}</p>"
+        with (
+            acknowledgement_on(),
+            hd_settings(acknowledgement_email_content=content),
+            patch("frappe.sendmail") as sendmail,
+        ):
+            ticket = make_ticket(subject="Printer & scanner")
+
+        [sent] = acknowledgements(sendmail)
+        self.assertEqual(sent["message"], f"<p>{ticket.name}: Printer & scanner</p>")
+
+    def test_feedback_content_renders_with_data_only(self):
+        ticket = make_ticket()
+        ticket.reload()
+        todos = frappe.db.count("ToDo")
+        with (
+            hd_settings(
+                enable_email_ticket_feedback=1,
+                send_email_feedback_on_status="",
+                feedback_email_content=HOSTILE_CONTENT,
+            ),
+            patch("frappe.sendmail") as sendmail,
+        ):
+            ticket.status = "Closed"
+            ticket.save()
+
+        self.assertTrue(sendmail.called, "feedback should have been emailed")
+        message = sendmail.call_args.kwargs["message"]
+        self.assertIn("We’d love your feedback", message)
+        self.assertIn(f"/ticket-feedback/new?key={ticket.key}", message)
+        self.assertEqual(frappe.db.count("ToDo"), todos)
+
+    def test_reply_to_template_renders_with_data_only(self):
+        ticket = make_ticket()
+        for template in (
+            '{{ frappe.db.get_value("User", "Administrator", "name") }}@example.com',
+            "{{ frappe.session.user }}@example.com",
+        ):
+            sent = send_reply_with_template(ticket, template)
+            self.assertEqual(sent["reply_to"], REPLY_ACCOUNT_EMAIL, template)
+            ticket.reload()
 
     def test_no_acknowledgement_for_a_ticket_created_in_the_portal(self):
         with acknowledgement_on(), patch("frappe.sendmail") as sendmail:

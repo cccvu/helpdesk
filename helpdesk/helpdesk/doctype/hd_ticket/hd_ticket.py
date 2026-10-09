@@ -1,6 +1,7 @@
 import json
 import uuid
 from email.utils import parseaddr
+from functools import partial
 from html import unescape
 
 import frappe
@@ -28,6 +29,7 @@ from pypika.functions import Count
 from pypika.queries import Query
 from pypika.terms import Criterion
 
+from helpdesk.data_template import render_data_template
 from helpdesk.file_access import can_read_file_url, disarm_embeds
 from helpdesk.helpdesk.doctype.hd_settings.helpers import (
     get_default_email_content,
@@ -121,22 +123,26 @@ class HDTicket(Document):
         args: dict[str, str] | None = None,
         keep_embeds: set[str] | frozenset[str] = frozenset(),
     ):
-        """Render an email template. Embeds other than `keep_embeds` are
-        disarmed, since ticket fields and messages in it come from callers."""
-        if args is None:
-            args = dict()
-        template_args = {
-            "doc": self.as_dict(),
-        }
-        for key, value in args.items():
-            template_args[key] = value
-        return disarm_embeds(
-            frappe.render_template(
-                default_content if is_email_content_empty(content) else content,
-                template_args,
-            ),
-            keep_embeds,
+        """Render an email template with this ticket as `doc` and `args`, as
+        data only (see helpdesk.data_template). A custom `content` that fails
+        to render is logged against the ticket and `default_content` is used
+        instead. Embeds other than `keep_embeds` are disarmed, since ticket
+        fields and messages in it come from callers."""
+        template_args = {"doc": self.as_dict(), **(args or {})}
+        render = partial(
+            render_data_template,
+            context=template_args,
+            title=_("Email template could not be rendered"),
+            reference_doctype="HD Ticket",
+            reference_name=self.name,
         )
+        if is_email_content_empty(content):
+            rendered = render(default_content, fallback="")
+        else:
+            rendered = render(content, fallback=None)
+            if rendered is None:
+                rendered = render(default_content, fallback="")
+        return disarm_embeds(rendered, keep_embeds)
 
     def handle_email_feedback(self):
         if (
@@ -621,6 +627,7 @@ class HDTicket(Document):
 
             support+{{ doc.name }}@example.com
 
+        It renders with the ticket's data only, see helpdesk.data_template.
         Returns `default` when the template is empty, fails to render, or does not
         produce a valid email address. Agent replies pass the email account's
         address; the acknowledgement passes None, so Frappe's own default applies.
@@ -630,25 +637,14 @@ class HDTicket(Document):
         if not (template or "").strip():
             return default
 
-        # render_template shows its own error dialog on a Jinja error; this is
-        # logged below and the reply goes on with the default address instead.
-        # `doc` is a plain dict, as for the email content templates, so the
-        # template can read the ticket but not call its methods.
-        mute_messages = frappe.flags.mute_messages
-        frappe.flags.mute_messages = True
-        try:
-            rendered = frappe.render_template(template, {"doc": self.as_dict()})
-            address = (rendered or "").strip()
-        except Exception:
-            frappe.log_error(
-                title=_("Reply-To template could not be rendered"),
-                reference_doctype="HD Ticket",
-                reference_name=self.name,
-            )
-            return default
-        finally:
-            frappe.flags.mute_messages = mute_messages
-
+        address = render_data_template(
+            template,
+            {"doc": self.as_dict()},
+            fallback="",
+            title=_("Reply-To template could not be rendered"),
+            reference_doctype="HD Ticket",
+            reference_name=self.name,
+        ).strip()
         if not address or not validate_email_address(address, throw=False):
             return default
         return address

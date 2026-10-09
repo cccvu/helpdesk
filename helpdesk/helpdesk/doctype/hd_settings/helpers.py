@@ -1,5 +1,10 @@
+from functools import partial
+
 import frappe
+from frappe import _
 from frappe.utils import get_datetime
+
+from helpdesk.data_template import render_data_template
 
 
 def is_email_content_empty(content: str | None) -> bool:
@@ -110,13 +115,15 @@ def get_banner_msg():
 
 
 def get_rendered_banner_msg(ticket_id):
+    """The outside-hours banner for a ticket, rendered with data only (see
+    helpdesk.data_template). A custom message that fails to render is logged
+    against the ticket and the default message is shown instead."""
     banner_msg = frappe.db.get_single_value(
         "HD Settings", "outside_working_hours_message"
     )
     ticket = frappe.get_doc("HD Ticket", ticket_id).as_dict()
-    if not banner_msg:
-        banner_msg = default_banner_msg
 
+    next_working_day_dt = None
     next_working_day = None
     next_working_date = None
     expected_response = None
@@ -134,8 +141,17 @@ def get_rendered_banner_msg(ticket_id):
         "next_working_date": next_working_date,
         "expected_response": expected_response,
     }
+    render = partial(
+        render_data_template,
+        context=context,
+        title=_("Outside working hours banner could not be rendered"),
+        reference_doctype="HD Ticket",
+        reference_name=ticket.name,
+    )
 
-    rendered = frappe.render_template(banner_msg, context)
+    rendered = render(banner_msg, fallback=None) if banner_msg else None
+    if rendered is None:
+        rendered = render(default_banner_msg, fallback="")
 
     return {
         "banner_msg": rendered,
