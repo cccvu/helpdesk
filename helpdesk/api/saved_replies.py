@@ -1,3 +1,6 @@
+import html
+import re
+
 import frappe
 from frappe import _
 from frappe.utils import strip_html
@@ -11,6 +14,27 @@ from helpdesk.helpdesk.doctype.hd_saved_reply.hd_saved_reply import (
 )
 from helpdesk.utils import agent_only
 
+# `{{ field }}` or `{{ doc.field }}`, as the editor's placeholder menu inserts
+PLACEHOLDER = re.compile(r"\{\{\s*(doc\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+# The signed-in user's fields a placeholder can name; mirrors `userFields` in
+# desk/src/components/Settings/SavedReplies/savedReplies.ts
+USER_FIELDS = (
+    "email",
+    "first_name",
+    "middle_name",
+    "last_name",
+    "full_name",
+    "username",
+    "user_image",
+    "phone",
+    "location",
+    "bio",
+    "mobile_no",
+)
+RICH_TEXT_FIELDTYPES = ("Text Editor", "HTML Editor")
+# The ticket's access key is a secret, not reply text
+SECRET_TICKET_FIELDS = ("key",)
+
 
 @frappe.whitelist()
 @agent_only
@@ -21,13 +45,9 @@ def get_rendered_saved_reply(ticket_id: str, saved_reply_id: str | None = None):
     saved_reply.check_permission("read")
     ticket = frappe.get_doc("HD Ticket", ticket_id)
     ticket.check_permission("read")
-    user = frappe.get_doc("User", frappe.session.user).as_dict()
     return {
         "title": saved_reply.title,
-        # Templates are authored by agents, never by customers
-        "message": frappe.render_template(  # nosemgrep
-            saved_reply.message, {**ticket.as_dict(), **user}
-        ),
+        "message": render_saved_reply(saved_reply.message, ticket),
         # Stale actions are dropped here so agents never stage one that
         # would fail after the email is already sent
         "actions": [
@@ -36,6 +56,46 @@ def get_rendered_saved_reply(ticket_id: str, saved_reply_id: str | None = None):
             if is_action_valid(action.get("action_type"), action.get("value"))
         ],
     }
+
+
+def render_saved_reply(message: str | None, ticket) -> str:
+    """Fill `{{ field }}` placeholders in a saved reply as escaped text.
+
+    A bare name is one of the ticket's fields the user may read (`name` is
+    the ticket's, its access key never is), or else one of USER_FIELDS of the
+    signed-in user; `doc.name` reads the ticket only. Rich text is reduced to plain text and
+    an empty value to "". Nothing is evaluated: unknown names and any other
+    template syntax stay exactly as written.
+    """
+    if not message:
+        return message or ""
+
+    meta = ticket.meta
+    ticket_fields = {
+        "name",
+        *meta.get_permitted_fieldnames(permission_type="read"),
+    } - set(SECRET_TICKET_FIELDS)
+    user = frappe.db.get_value("User", frappe.session.user, USER_FIELDS, as_dict=True)
+
+    def as_text(value, fieldtype=None) -> str:
+        if value is None:
+            return ""
+        text = str(value)
+        if fieldtype in RICH_TEXT_FIELDTYPES:
+            text = strip_html(text)
+        # Stored text may already hold entities; escape it exactly once
+        return html.escape(html.unescape(text))
+
+    def fill(match: re.Match) -> str:
+        on_ticket, fieldname = match.group(1), match.group(2)
+        if fieldname in ticket_fields:
+            df = meta.get_field(fieldname)
+            return as_text(ticket.get(fieldname), df.fieldtype if df else None)
+        if not on_ticket and user and fieldname in USER_FIELDS:
+            return as_text(user.get(fieldname))
+        return match.group(0)
+
+    return PLACEHOLDER.sub(fill, message)
 
 
 def serialize_action(action: dict) -> dict:
