@@ -1,6 +1,7 @@
 import re
 
 import frappe
+from frappe.utils import cstr
 from frappe.utils.html_utils import sanitize_html
 
 # Where a browser starts a tag, an end tag or a comment; any other "<" is text,
@@ -65,11 +66,11 @@ def _sanitize_doc(doc):
     # Read stored columns directly: get_valid_dict would also reject values
     # the controller converts later in validate (a list in a JSON-text field)
     for fieldname in meta.get_valid_columns():
-        value = doc.get(fieldname)
-        if not isinstance(value, str) or not MARKUP.search(value):
-            continue
         df = meta.get_field(fieldname)
         if not df or df.get("is_virtual"):
+            continue
+        value = _stored_text(df, doc.get(fieldname))
+        if value is None or not MARKUP.search(value):
             continue
         fieldtype = df.get("fieldtype")
         if (
@@ -89,3 +90,18 @@ def _sanitize_doc(doc):
                 value, linkify=fieldtype == "Text Editor", always_sanitize=True
             ),
         )
+
+
+def _stored_text(df, value):
+    """Return the text a save stores for value, or None if it stores no text.
+
+    BaseDocument.get_valid_dict, which db_insert and db_update use, refuses a
+    list in a non-table field and turns any other non-string value in a Read
+    Only field into text with cstr. Elsewhere a dict is refused by the database
+    driver, and numbers and None carry no markup, so only these become text.
+    """
+    if isinstance(value, str):
+        return value
+    if value is None or isinstance(value, list) or df.get("fieldtype") != "Read Only":
+        return None
+    return cstr(value)

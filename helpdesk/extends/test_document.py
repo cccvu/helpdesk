@@ -111,6 +111,18 @@ class TestSanitizeHtmlFields(FrappeTestCase):
             frappe.db.get_value("HD Saved Reply", doc.name, "actions"), "[]"
         )
 
+    def test_non_string_value_in_a_read_only_field_is_sanitized(self) -> None:
+        # A save stores a Read Only field's non-string value as its text
+        # (get_valid_dict's cstr), so the hook sanitizes that text too.
+        doc = frappe.get_doc(
+            {
+                "doctype": "ToDo",
+                "description": "sanitize-hook-read-only-test",
+                "assigned_by_full_name": {"name": COMMENT_SHAPED},
+            }
+        ).insert(ignore_permissions=True)
+        self.assertInert(frappe.db.get_value("ToDo", doc.name, "assigned_by_full_name"))
+
     def test_insert_runs_the_hook(self) -> None:
         # End to end: the registered "*" hook sanitizes on insert.
         doc = frappe.get_doc(
@@ -179,6 +191,35 @@ class TestSanitizeSkipBranches(FrappeTestCase):
         # always_sanitize would corrupt JSON columns like _comments/_assign that
         # Frappe spares via its is_json early return (issue 251 review).
         self._kept({"f": None})
+
+    def test_skips_virtual_fields(self) -> None:
+        # A virtual field has no stored column; its value is computed on read.
+        self._kept({"f": frappe._dict(fieldtype="Text Editor", is_virtual=1)})
+
+    def test_read_only_field_sanitizes_the_text_a_save_stores(self) -> None:
+        for value in ({"k": PAYLOAD}, (PAYLOAD,)):
+            with self.subTest(value=value):
+                doc = _FakeDoc({"f": value}, {"f": frappe._dict(fieldtype="Read Only")})
+                _sanitize_doc(doc)
+                self.assertIsInstance(doc.get("f"), str)
+                self.assertNotIn("onerror", doc.get("f"))
+
+    def test_other_non_string_values_are_left_for_the_save_to_check(self) -> None:
+        # A save refuses a list in any non-table field (get_valid_dict) and a
+        # dict outside Read Only (the database driver), so the hook leaves them.
+        cases = [
+            ("Data", {"k": PAYLOAD}),
+            ("Data", [PAYLOAD]),
+            ("Data", 5),
+            ("Data", None),
+            ("Read Only", [PAYLOAD]),
+            ("Read Only", None),
+        ]
+        for fieldtype, value in cases:
+            with self.subTest(fieldtype=fieldtype, value=value):
+                doc = _FakeDoc({"f": value}, {"f": frappe._dict(fieldtype=fieldtype)})
+                _sanitize_doc(doc)
+                self.assertEqual(doc.get("f"), value)
 
     def test_skips_ignore_xss_filter(self) -> None:
         self._kept({"f": frappe._dict(fieldtype="Text Editor", ignore_xss_filter=1)})
