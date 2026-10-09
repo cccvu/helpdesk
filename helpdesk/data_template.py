@@ -94,6 +94,12 @@ FILTERS = {
 _environment = None
 
 
+def translate(message, context=None):
+    """Frappe's `_` without its `lang` argument, which Frappe reads as part of
+    a file path."""
+    return frappe._(cstr(message), context=None if context is None else cstr(context))
+
+
 def get_environment():
     global _environment
     if _environment is None:
@@ -155,7 +161,7 @@ def render_data_template(
     try:
         values = plain_data(dict(context))
         values["frappe"] = MappingProxyType({"utils": UTILS})
-        values["_"] = frappe._
+        values["_"] = translate
         return get_environment().from_string(template).render(values)
     except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
         # the transaction is lost; let the caller retry the whole request

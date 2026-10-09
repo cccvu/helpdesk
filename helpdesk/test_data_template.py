@@ -14,6 +14,7 @@ from helpdesk.data_template import (
     UTILS,
     get_environment,
     render_data_template,
+    translate,
 )
 from helpdesk.helpdesk.doctype.hd_settings.helpers import (
     default_banner_msg,
@@ -251,7 +252,7 @@ class TestDataTemplate(FrappeTestCase):
         )
 
         env = get_environment()
-        helpers = {id(v) for v in (*UTILS.values(), *FILTERS.values(), frappe._)}
+        helpers = {id(v) for v in (*UTILS.values(), *FILTERS.values(), translate)}
         containers = (list, frappe._dict, MappingProxyType)
         receivers = (*PLAIN_TYPES, *containers, dict)
 
@@ -297,6 +298,33 @@ class TestDataTemplate(FrappeTestCase):
             for child, child_path in children:
                 if check(child, child_path):
                     queue.append((child, child_path, depth + 1))
+
+    def test_translate_takes_no_language(self):
+        """Frappe's `_` reads the translations of its `lang` argument from a
+        file under that name, so a template's `_` takes none."""
+        self.assertEqual(self.render("{{ _('Open') }}", {}), frappe._("Open"))
+        with patch("frappe.translate.get_all_translations", return_value={}) as read:
+            self.assertEqual(
+                self.render("{{ _('Open', lang='/etc/passwd') }}", {}), FALLBACK
+            )
+            # A second argument is the translation's context, a key, not a file
+            for template in (
+                "{{ _('Open', '/etc/passwd') }}",
+                "{{ _('Open', context='/etc/passwd') }}",
+            ):
+                self.assertEqual(self.render(template, {}), "Open", template)
+        self.assertNotIn(
+            "/etc/passwd", [call.args[0] for call in read.call_args_list if call.args]
+        )
+
+    def test_jinja_checks_format_calls(self):
+        """The environment allows str.format and format_map, which Frappe's
+        list blocks; Jinja's sandbox checks every call to them from 3.1.6
+        (CVE-2024-56326, CVE-2025-27516)."""
+        import jinja2
+        from packaging.version import Version
+
+        self.assertGreaterEqual(Version(jinja2.__version__), Version("3.1.6"))
 
     def test_a_deadlock_reaches_the_caller(self):
         for error in (frappe.QueryDeadlockError, frappe.QueryTimeoutError):

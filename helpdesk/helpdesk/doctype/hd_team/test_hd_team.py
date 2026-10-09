@@ -498,6 +498,45 @@ class TestHDTeamDelete(FrappeTestCase):
                 "HD Team", "Test Delete Linked", force=True, ignore_permissions=True
             )
 
+    def test_delete_keeps_a_rule_for_other_documents(self):
+        """A team deletes its rule with ignore_on_trash, so it deletes only a
+        ticket rule: a rule for other documents is a System Manager's."""
+        team = make_team("Test Delete Linked", [self.agent], disabled=True)
+        own_rule = team.assignment_rule
+        other = frappe.get_doc(
+            {
+                "doctype": "Assignment Rule",
+                "name": "Test Delete Linked User Rule",
+                "document_type": "User",
+                "assign_condition": "1",
+                "rule": "Round Robin",
+                "disabled": 1,
+                "assignment_days": [{"day": "Monday"}],
+            }
+        ).insert()
+        self.addCleanup(
+            frappe.delete_doc,
+            "Assignment Rule",
+            other.name,
+            force=True,
+            ignore_permissions=True,
+            ignore_on_trash=True,
+        )
+        self.addCleanup(
+            frappe.delete_doc,
+            "Assignment Rule",
+            own_rule,
+            force=True,
+            ignore_permissions=True,
+            ignore_on_trash=True,
+        )
+        team.db_set("assignment_rule", other.name)
+
+        frappe.delete_doc("HD Team", team.name)
+
+        self.assertFalse(frappe.db.exists("HD Team", team.name))
+        self.assertTrue(frappe.db.exists("Assignment Rule", other.name))
+
     def test_failed_delete_keeps_the_assignment_rule(self):
         team = make_team("Test Delete Linked", [self.agent], disabled=True)
         make_ticket(agent_group=team.name)

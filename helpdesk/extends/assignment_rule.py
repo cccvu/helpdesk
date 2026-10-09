@@ -16,6 +16,24 @@ def on_assignment_rule_trash(doc, event):
         frappe.throw(_("There should be at least 1 assignment rule for ticket"))
 
 
+def on_assignment_rule_before_rename(doc, event, old, new, merge=False):
+    """A rename skips validate, and a merge points every link to `old` (a
+    team's, for one) at `new`: only System Managers rename or merge rules for
+    other documents."""
+    if "System Manager" in frappe.get_roles():
+        return
+    document_types = {doc.document_type}
+    if merge:
+        document_types.add(frappe.db.get_value("Assignment Rule", new, "document_type"))
+    if document_types != {"HD Ticket"}:
+        frappe.throw(
+            _(
+                "Only a System Manager can set up assignment rules for documents other than tickets"
+            ),
+            frappe.PermissionError,
+        )
+
+
 def on_assignment_rule_validate(doc, event):
     validate_document_type(doc)
 

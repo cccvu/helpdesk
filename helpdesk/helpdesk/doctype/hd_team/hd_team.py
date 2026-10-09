@@ -74,6 +74,12 @@ class HDTeam(Document):
     def on_trash(self):
         if not self.assignment_rule:
             return
+        # A rule for other documents is a System Manager's: the team leaves it.
+        document_type = frappe.db.get_value(
+            "Assignment Rule", self.assignment_rule, "document_type"
+        )
+        if document_type and document_type != "HD Ticket":
+            return
         try:
             frappe.delete_doc(
                 "Assignment Rule",

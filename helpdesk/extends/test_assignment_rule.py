@@ -1,4 +1,5 @@
 import frappe
+from frappe.model.rename_doc import rename_doc
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import get_absolute_url
 
@@ -313,6 +314,31 @@ class TestAssignmentRuleRights(FrappeTestCase):
         self.assertEqual(
             frappe.db.get_value("Assignment Rule", name, "document_type"), "HD Ticket"
         )
+
+    def test_manager_cannot_rename_or_merge_into_rules_for_other_documents(self):
+        """A rename skips validate, and a merge points the old rule's links
+        (a team's) at the rule it merges into."""
+        other = frappe.get_doc(rule_dict("Test AR Rename User", "User")).insert().name
+        ticket = insert_as(
+            self.manager, rule_dict("Test AR Rename Ticket", "HD Ticket")
+        )["name"]
+
+        def rename_as_manager(old, new, merge=False):
+            frappe.set_user(self.manager)
+            try:
+                rename_doc("Assignment Rule", old, new, merge=merge)
+            finally:
+                frappe.set_user("Administrator")
+
+        self.assertRefused(rename_as_manager, ticket, other, True)
+        self.assertRefused(rename_as_manager, other, "Test AR Renamed User")
+        self.assertTrue(frappe.db.exists("Assignment Rule", ticket))
+        self.assertEqual(
+            frappe.db.get_value("Assignment Rule", other, "document_type"), "User"
+        )
+
+        rename_as_manager(ticket, "Test AR Renamed Ticket")
+        self.assertTrue(frappe.db.exists("Assignment Rule", "Test AR Renamed Ticket"))
 
     def test_hooks_saving_as_a_manager_are_checked(self):
         """The check runs on saves with ignore_permissions too."""
