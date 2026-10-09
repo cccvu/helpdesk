@@ -52,3 +52,4 @@ helpdesk.patches.set_default_portal_settings
 helpdesk.patches.backfill_priority_level
 helpdesk.patches.add_tag_custom_fields
 helpdesk.patches.rename_purple_status_color
+helpdesk.patches.regenerate_field_dependency_scripts
