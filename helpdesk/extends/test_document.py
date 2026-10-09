@@ -95,12 +95,29 @@ class TestSanitizeHtmlFields(FrappeTestCase):
         sanitize_html_fields(doc)
         self.assertEqual(doc.script, payload)
 
+    def test_list_value_for_a_controller_converted_field_saves(self) -> None:
+        # HD Saved Reply's validate turns an actions list into JSON text; the
+        # hook runs first and must not refuse the list (the Settings UI sends one).
+        doc = frappe.get_doc(
+            {
+                "doctype": "HD Saved Reply",
+                "title": "sanitize-hook-list-test",
+                "message": COMMENT_SHAPED,
+                "actions": [],
+            }
+        ).insert(ignore_permissions=True)
+        self.assertInert(frappe.db.get_value("HD Saved Reply", doc.name, "message"))
+        self.assertEqual(
+            frappe.db.get_value("HD Saved Reply", doc.name, "actions"), "[]"
+        )
+
     def test_insert_runs_the_hook(self) -> None:
         # End to end: the registered "*" hook sanitizes on insert.
         doc = frappe.get_doc(
             {
                 "doctype": "HD Saved Reply",
                 "name": "sanitize-hook-test",
+                "title": "sanitize-hook-test",
                 "message": COMMENT_SHAPED,
             }
         ).insert(ignore_permissions=True)
@@ -114,6 +131,9 @@ class _FakeMeta:
     def get_field(self, fieldname):
         return self._fields.get(fieldname)
 
+    def get_valid_columns(self):
+        return list(self._fields)
+
 
 class _FakeDoc:
     """A document with controlled field metadata, so each skip branch of
@@ -125,9 +145,6 @@ class _FakeDoc:
         self.meta = _FakeMeta(fields)
         self.docstatus = DocStatus(docstatus)
         self._children = children or []
-
-    def get_valid_dict(self, ignore_virtual=False):
-        return dict(self._values)
 
     def get_all_children(self):
         return list(self._children)

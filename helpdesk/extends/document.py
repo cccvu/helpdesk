@@ -62,11 +62,14 @@ def sanitize_html_fields(doc, method=None):
 
 def _sanitize_doc(doc):
     meta = doc.meta
-    for fieldname, value in doc.get_valid_dict(ignore_virtual=True).items():
+    # Read stored columns directly: get_valid_dict would also reject values
+    # the controller converts later in validate (a list in a JSON-text field)
+    for fieldname in meta.get_valid_columns():
+        value = doc.get(fieldname)
         if not isinstance(value, str) or not MARKUP.search(value):
             continue
         df = meta.get_field(fieldname)
-        if not df:
+        if not df or df.get("is_virtual"):
             continue
         fieldtype = df.get("fieldtype")
         if (
