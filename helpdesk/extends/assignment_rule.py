@@ -6,6 +6,7 @@ from helpdesk.utils import is_json_valid
 
 
 def on_assignment_rule_trash(doc, event):
+    validate_document_type(doc)
     if doc.document_type != "HD Ticket":
         return
     if not frappe.get_all(
@@ -16,6 +17,8 @@ def on_assignment_rule_trash(doc, event):
 
 
 def on_assignment_rule_validate(doc, event):
+    validate_document_type(doc)
+
     if doc.assign_condition_json and not is_json_valid(doc.assign_condition_json):
         frappe.throw(
             _("The Assign Condition JSON '{0}' is invalid: </br> {1}").format(
@@ -33,6 +36,31 @@ def on_assignment_rule_validate(doc, event):
         )
 
     validate_users(doc)
+
+
+def validate_document_type(doc):
+    """Only System Managers set up rules for documents other than tickets, or
+    change such a rule. A rule assigns and shares the documents it matches and
+    renders their fields into the assignment."""
+    if "System Manager" in frappe.get_roles():
+        return
+
+    document_types = {doc.document_type}
+    if not doc.is_new():
+        before = doc.get_doc_before_save()
+        document_types.add(
+            before.document_type
+            if before
+            else frappe.db.get_value("Assignment Rule", doc.name, "document_type")
+        )
+
+    if document_types != {"HD Ticket"}:
+        frappe.throw(
+            _(
+                "Only a System Manager can set up assignment rules for documents other than tickets"
+            ),
+            frappe.PermissionError,
+        )
 
 
 def validate_users(doc):

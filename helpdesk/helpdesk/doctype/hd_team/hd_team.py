@@ -32,6 +32,26 @@ class HDTeam(Document):
     def validate(self):
         if self.is_new():
             self.validate_team_name(self.name)
+        else:
+            self.validate_assignment_rule_link()
+
+    def validate_assignment_rule_link(self):
+        """Only System Managers point a team at another Assignment Rule: the
+        team's hooks rewrite and delete its rule with ignore_permissions.
+        Helpdesk links the rule it creates with db_set, which skips this."""
+        if "System Manager" in frappe.get_roles():
+            return
+        before = self.get_doc_before_save()
+        previous = (
+            before.assignment_rule
+            if before
+            else frappe.db.get_value("HD Team", self.name, "assignment_rule")
+        )
+        if (self.assignment_rule or None) != (previous or None):
+            frappe.throw(
+                _("Only a System Manager can change a team's assignment rule"),
+                frappe.PermissionError,
+            )
 
     def before_rename(self, olddn, newdn, merge=False):
         self.validate_team_name(newdn)
