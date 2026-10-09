@@ -26,7 +26,7 @@ import { Autocomplete } from "@/components";
 import FieldLabel from "@/components/FieldLabel.vue";
 import TicketPriority from "@/components/TicketPriority.vue";
 import { APIOptions, Field, FieldValue } from "@/types";
-import { parseApiOptions } from "@/utils";
+import { optionsMethod, parseApiOptions } from "@/utils";
 import { Link } from "@framework/ui";
 import {
   Combobox,
@@ -56,9 +56,11 @@ interface E {
 const props = defineProps<P>();
 const emit = defineEmits<E>();
 
+const optionsUrl = optionsMethod(props.field.url_method);
 const apiOptions = createResource({
-  url: props.field.url_method,
-  auto: !!props.field.url_method,
+  url: optionsUrl,
+  method: "GET",
+  auto: !!optionsUrl,
   transform: (data: APIOptions) => {
     return parseApiOptions(data);
   },
@@ -127,7 +129,7 @@ function combobox(options: Option[]) {
 }
 
 const component = computed(() => {
-  if (props.field.url_method) {
+  if (optionsUrl) {
     return h(Autocomplete, {
       options: apiOptions.data,
     });

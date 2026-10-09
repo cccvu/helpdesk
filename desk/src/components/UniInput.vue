@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { Autocomplete, Link } from "@/components";
 import { APIOptions, Field } from "@/types";
-import { parseApiOptions } from "@/utils";
+import { optionsMethod, parseApiOptions } from "@/utils";
 import {
   createResource,
   DatePicker,
@@ -58,8 +58,9 @@ interface E {
 const props = defineProps<P>();
 const emit = defineEmits<E>();
 
+const optionsUrl = optionsMethod(props.field.url_method);
 const component = computed(() => {
-  if (props.field.url_method) {
+  if (optionsUrl) {
     return h(Autocomplete, {
       options: apiOptions.data,
       size: "sm",
@@ -108,8 +109,9 @@ const component = computed(() => {
 });
 
 const apiOptions = createResource({
-  url: props.field.url_method,
-  auto: !!props.field.url_method,
+  url: optionsUrl,
+  method: "GET",
+  auto: !!optionsUrl,
   transform: (data: APIOptions) => {
     return parseApiOptions(data);
   },
@@ -126,7 +128,7 @@ const placeholder = computed(() => {
   if (props.field.placeholder) {
     return props.field.placeholder;
   }
-  if (props.field.fieldtype === "Data" && !props.field.url_method) {
+  if (props.field.fieldtype === "Data" && !optionsUrl) {
     return "Type something";
   } else if (
     props.field.fieldtype === "Select" ||
