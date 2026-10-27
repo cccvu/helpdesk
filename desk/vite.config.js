@@ -17,6 +17,10 @@ export default defineConfig(async ({ mode }) => {
 
   const frappeui = await importFrappeUIPlugin({ useLocalFrappeUI });
   const config = {
+    build: {
+      // Keep the hash alphabet stable across Rollup versions for cache rules.
+      rollupOptions: { output: { hashCharacters: "hex" } },
+    },
     plugins: [
       frappeui({
         frappeProxy: true,
