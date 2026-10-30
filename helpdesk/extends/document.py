@@ -1,6 +1,10 @@
+import json
 import re
 
 import frappe
+from bs4 import BeautifulSoup
+from bs4.dammit import EntitySubstitution
+from bs4.formatter import HTMLFormatter
 from frappe.utils import cstr
 from frappe.utils.html_utils import sanitize_html
 
@@ -16,6 +20,17 @@ MARKUP = re.compile(r"<[A-Za-z/!?]")
 # save. A JSON-shaped *string* in a Data/Text/Text Editor field is still
 # sanitized: only the "JSON" fieldtype is skipped, not JSON-looking content.
 NON_HTML_FIELDTYPES = {"Attach", "Attach Image", "Barcode", "Code", "JSON"}
+
+# A character that is markup once a browser has decoded an attribute value or an
+# element's text. sanitize_html stores them there as "&lt;" and "&gt;".
+DECODED_MARKUP = re.compile(r"[<>]")
+
+# Fields that hold JSON whose strings the desk can render as HTML: the workspace
+# editor puts its blocks' text into innerHTML, and the list view shows a saved
+# filter's field name in a message as HTML. A JSON escape ("\u003c") hides markup
+# from MARKUP, and sanitizing the JSON text as HTML mangles its quotes, so each
+# string in it is sanitized instead (sanitize_json_html).
+JSON_HTML_FIELDS = {("Workspace", "content"), ("List Filter", "filters")}
 
 
 def sanitize_html_fields(doc, method=None):
@@ -50,9 +65,16 @@ def sanitize_html_fields(doc, method=None):
       escaped and corrupted; the residual gap (a meta-less name holding markup)
       has no known HTML sink.
 
+    Two additions on top of sanitize_html, for markup it keeps but the desk
+    decodes back into live HTML: data-* values and mention text with markup
+    (drop_markup_data), and JSON fields whose strings are HTML
+    (JSON_HTML_FIELDS).
+
     Upstream develop closes both v15 gaps (frappe/frappe#41626 and
     has_html_tags); drop this, and the Communication recipient guard beside it,
-    once version-15 has them.
+    once version-15 has them. drop_markup_data can go once Frappe's mention
+    blot writes its values as text, and JSON_HTML_FIELDS once the workspace
+    blocks and the list view's filter message escape what they render.
     """
     if frappe.flags.in_install:
         return
@@ -70,7 +92,10 @@ def _sanitize_doc(doc):
         if not df or df.get("is_virtual"):
             continue
         value = _stored_text(df, doc.get(fieldname))
-        if value is None or not MARKUP.search(value):
+        if value is None:
+            continue
+        is_json_html = (doc.doctype, fieldname) in JSON_HTML_FIELDS
+        if not is_json_html and not MARKUP.search(value):
             continue
         fieldtype = df.get("fieldtype")
         if (
@@ -84,12 +109,104 @@ def _sanitize_doc(doc):
             or (doc.docstatus.is_submitted() and not df.get("allow_on_submit"))
         ):
             continue
-        doc.set(
-            fieldname,
-            sanitize_html(
-                value, linkify=fieldtype == "Text Editor", always_sanitize=True
-            ),
-        )
+        if is_json_html:
+            doc.set(fieldname, sanitize_json_html(value))
+        else:
+            doc.set(
+                fieldname, sanitize_markup(value, linkify=fieldtype == "Text Editor")
+            )
+
+
+def sanitize_markup(value, linkify=False):
+    """Frappe's sanitize_html, forced, then drop_markup_data."""
+    return drop_markup_data(sanitize_html(value, linkify=linkify, always_sanitize=True))
+
+
+def drop_markup_data(html):
+    """Remove from sanitized HTML what the desk would turn back into markup.
+
+    sanitize_html keeps every data-* attribute and a text's "<" as escaped text,
+    and a browser decodes both (dataset, textContent). Frappe's Text Editor
+    (Quill) makes a mention of any element with the "mention" class, and writes
+    its data-value, data-label or data-denotation-char, or failing those its
+    text, into innerHTML. So each data-* attribute whose decoded value holds "<"
+    or ">" is dropped, and an element whose decoded text holds one loses the
+    "mention" class (it stays as plain text). A real mention, a name, has
+    neither. HTML that needs no change is returned exactly as given.
+    """
+    if "data-" not in html and "mention" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    for tag in soup.find_all(True):
+        for name, value in list(tag.attrs.items()):
+            if name.startswith("data-") and DECODED_MARKUP.search(_attr_text(value)):
+                del tag[name]
+                changed = True
+        classes = tag.get("class") or []
+        if "mention" in classes and DECODED_MARKUP.search(tag.get_text()):
+            rest = [name for name in classes if name != "mention"]
+            if rest:
+                tag["class"] = rest
+            else:
+                del tag["class"]
+            changed = True
+    return soup.decode(formatter=_AS_PARSED) if changed else html
+
+
+class _AsParsed(HTMLFormatter):
+    """BeautifulSoup's minimal formatter, but with attributes in their own order
+    (the default sorts them) and void elements as HTML writes them (<br>)."""
+
+    def attributes(self, tag):
+        return list(tag.attrs.items())
+
+
+_AS_PARSED = _AsParsed(
+    entity_substitution=EntitySubstitution.substitute_xml,
+    void_element_close_prefix=None,
+)
+
+
+def _attr_text(value):
+    return " ".join(value) if isinstance(value, list) else value
+
+
+def sanitize_json_html(value):
+    """Sanitize each string in a JSON value whose strings are HTML.
+
+    Only strings with markup change, and the JSON is written again only if one
+    did, so a value without markup is kept exactly as given. A value that isn't
+    JSON is sanitized as HTML, as any other field is.
+    """
+    try:
+        data = json.loads(value)
+    except (ValueError, RecursionError):
+        return sanitize_markup(value) if MARKUP.search(value) else value
+    changed = False
+
+    def clean(node):
+        nonlocal changed
+        if isinstance(node, str):
+            if not MARKUP.search(node):
+                return node
+            cleaned = sanitize_markup(node)
+            changed = changed or cleaned != node
+            return cleaned
+        if isinstance(node, list):
+            return [clean(item) for item in node]
+        if isinstance(node, dict):
+            return {key: clean(item) for key, item in node.items()}
+        return node
+
+    try:
+        data = clean(data)
+    except RecursionError:
+        return sanitize_markup(value)
+    if not changed:
+        return value
+    # As the desk's JSON.stringify writes it.
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 def _stored_text(df, value):

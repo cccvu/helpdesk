@@ -1,8 +1,16 @@
+import json
+
 import frappe
 from frappe.model.docstatus import DocStatus
 from frappe.tests.utils import FrappeTestCase
 
-from helpdesk.extends.document import _sanitize_doc, sanitize_html_fields
+from helpdesk.extends.document import (
+    _sanitize_doc,
+    drop_markup_data,
+    sanitize_html_fields,
+    sanitize_json_html,
+)
+from helpdesk.test_utils import make_mention_html
 
 # Two values Frappe v15's sanitize_html returns unchanged: one parses as JSON,
 # one is a single comment to BeautifulSoup but a live <img> to a browser.
@@ -136,6 +144,198 @@ class TestSanitizeHtmlFields(FrappeTestCase):
         self.assertInert(frappe.db.get_value("HD Saved Reply", doc.name, "message"))
 
 
+# Values that are markup only once the browser decodes them: in data-* attributes
+# Frappe's mention blot reads (data-value, data-label as Helpdesk's own mentions
+# write it, data-denotation-char), and in a mention's text, which the blot falls
+# back to. sanitize_html keeps all four as they are, entity-encoded.
+ENCODED_IMG = "&lt;img src=x onerror=alert(1)&gt;"
+MENTION_DATA = {
+    "data-value": f'<span class="mention" data-id="a@b.c" data-value="{ENCODED_IMG}">@x</span>',
+    "data-label": (
+        f'<span class="mention" data-type="mention" data-id="a@b.c" '
+        f'data-label="{ENCODED_IMG}">@x</span>'
+    ),
+    "data-denotation-char": (
+        f'<span class="mention" data-id="a@b.c" data-value="x" '
+        f'data-denotation-char="{ENCODED_IMG}">@x</span>'
+    ),
+}
+MENTION_TEXT = f'<p><span class="mention">{ENCODED_IMG}</span></p>'
+# Frappe's own Text Editor writes its mentions like this.
+QUILL_MENTION = (
+    '<p><span class="mention" data-index="0" data-denotation-char="@" '
+    'data-id="a@b.c" data-value="Ann Lee"><span contenteditable="false">'
+    '<span class="ql-mention-denotation-char">@</span>Ann Lee</span></span> hi</p>'
+)
+
+
+def _decoded(html):
+    """Every attribute value and text node of html, as the browser decodes them."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    values = [soup.get_text()]
+    for tag in soup.find_all(True):
+        values += [
+            " ".join(v) if isinstance(v, list) else v for v in tag.attrs.values()
+        ]
+    return values
+
+
+class TestDropMarkupData(FrappeTestCase):
+    def assertNoDecodedMarkup(self, html):
+        for value in _decoded(html):
+            if "mention" in html or "data-" in html:
+                self.assertNotRegex(value, "[<>]", html)
+
+    def test_markup_in_a_mention_data_attribute_is_dropped(self) -> None:
+        for attribute, payload in MENTION_DATA.items():
+            with self.subTest(attribute=attribute):
+                doc = frappe.get_doc(
+                    {"doctype": "HD Ticket", "subject": "x", "description": payload}
+                )
+                sanitize_html_fields(doc)
+                self.assertNotIn(attribute + "=", doc.description)
+                self.assertNotIn("&lt;img", doc.description)
+                self.assertIn('class="mention"', doc.description)
+                self.assertIn("@x", doc.description)
+
+    def test_markup_in_a_mention_text_loses_the_mention_class(self) -> None:
+        doc = frappe.get_doc({"doctype": "HD Ticket Comment", "content": MENTION_TEXT})
+        sanitize_html_fields(doc)
+        self.assertNotIn("mention", doc.content)
+        # Kept as text, which the editor shows as typed.
+        self.assertIn(ENCODED_IMG, doc.content)
+
+    def test_markup_in_any_data_attribute_is_dropped(self) -> None:
+        html = f'<p data-note="{ENCODED_IMG}" data-x="1">hi</p>'
+        self.assertEqual(drop_markup_data(html), '<p data-x="1">hi</p>')
+        self.assertEqual(drop_markup_data('<p data-note="a > b">hi</p>'), "<p>hi</p>")
+
+    def test_a_mention_keeps_its_other_classes(self) -> None:
+        html = f'<span class="x mention y">{ENCODED_IMG}</span>'
+        self.assertEqual(
+            drop_markup_data(html), f'<span class="x y">{ENCODED_IMG}</span>'
+        )
+
+    def test_real_mentions_are_kept_exactly(self) -> None:
+        helpdesk = f"<p>{make_mention_html('agent@example.com', 'Ann Lee')} hi</p>"
+        for html in (helpdesk, QUILL_MENTION):
+            with self.subTest(html=html):
+                self.assertEqual(drop_markup_data(html), html)
+                doc = frappe.get_doc(
+                    {"doctype": "HD Ticket", "subject": "x", "description": html}
+                )
+                sanitize_html_fields(doc)
+                self.assertEqual(doc.description, html)
+
+    def test_the_rest_of_a_changed_value_is_written_as_it_was(self) -> None:
+        # Attribute order, void elements and text survive the rewrite.
+        real = make_mention_html("agent@example.com", "Ann Lee")
+        html = (
+            f'<p>{real}<br><img src="x" alt="a">'
+            f'<span data-note="{ENCODED_IMG}">Café &amp; co</span></p>'
+        )
+        self.assertEqual(
+            drop_markup_data(html),
+            f'<p>{real}<br><img src="x" alt="a"><span>Café &amp; co</span></p>',
+        )
+
+    def test_text_without_markup_in_a_mention_or_data_is_kept(self) -> None:
+        for html in (
+            '<p data-x="a &amp; b">x</p>',
+            '<span class="mention">@a &amp; b</span>',
+            "<p>a &lt; b, no data attribute</p>",
+            "<p>a mention of mentions</p>",
+        ):
+            with self.subTest(html=html):
+                self.assertIs(drop_markup_data(html), html)
+
+
+def _json_escaped(text):
+    """text with "<" and ">" written as JSON escapes, as JSON.stringify can."""
+    return text.replace("<", chr(92) + "u003c").replace(">", chr(92) + "u003e")
+
+
+HEADER = '<span class="h4"><b>Reports &amp; Masters</b></span>'
+
+
+def workspace_content(*texts):
+    return json.dumps(
+        [
+            {"id": f"b{i}", "type": "paragraph", "data": {"text": text, "col": 12}}
+            for i, text in enumerate(texts)
+        ],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+class TestSanitizeJsonHtml(FrappeTestCase):
+    def test_escaped_markup_in_a_workspace_block_is_sanitized(self) -> None:
+        content = _json_escaped(workspace_content("<img src=x onerror=alert(1)>"))
+        self.assertNotIn("<", content)  # MARKUP would not see it
+        doc = frappe.get_doc(
+            {"doctype": "Workspace", "title": "x", "label": "x", "content": content}
+        )
+        sanitize_html_fields(doc)
+        text = json.loads(doc.content)[0]["data"]["text"]
+        self.assertIn("<img", text)
+        self.assertNotIn("onerror", text)
+
+    def test_quotes_and_safe_markup_are_kept(self) -> None:
+        # Sanitizing the JSON text as HTML wrote class="h4" as class='"h4"'.
+        content = workspace_content(HEADER, "Plain text, a < b", "Café")
+        doc = frappe.get_doc(
+            {"doctype": "Workspace", "title": "x", "label": "x", "content": content}
+        )
+        sanitize_html_fields(doc)
+        self.assertEqual(doc.content, content)
+        self.assertEqual(json.loads(doc.content)[0]["data"]["text"], HEADER)
+
+    def test_only_the_strings_with_markup_change(self) -> None:
+        content = workspace_content(HEADER, "<b onclick=x>bold</b>", "Café")
+        cleaned = json.loads(sanitize_json_html(content))
+        self.assertEqual(
+            [block["data"]["text"] for block in cleaned],
+            [HEADER, "<b>bold</b>", "Café"],
+        )
+
+    def test_escaped_markup_in_a_saved_list_filter_is_sanitized(self) -> None:
+        filters = _json_escaped(
+            json.dumps([["HD Ticket", "<img src=x onerror=alert(1)>", "=", "1"]])
+        )
+        doc = frappe.get_doc(
+            {
+                "doctype": "List Filter",
+                "reference_doctype": "HD Ticket",
+                "filter_name": "x",
+                "filters": filters,
+            }
+        )
+        sanitize_html_fields(doc)
+        self.assertNotIn("onerror", json.loads(doc.filters)[0][1])
+        plain = json.dumps([["HD Ticket", "status", "=", "Open"]])
+        doc.filters = plain
+        sanitize_html_fields(doc)
+        self.assertEqual(doc.filters, plain)
+
+    def test_mention_data_in_a_block_is_dropped(self) -> None:
+        content = workspace_content(MENTION_DATA["data-value"])
+        self.assertNotIn("data-value", sanitize_json_html(content))
+
+    def test_nested_values_are_sanitized(self) -> None:
+        content = json.dumps({"a": [{"b": ["<img src=x onerror=1>"]}], "n": 1})
+        self.assertEqual(
+            json.loads(sanitize_json_html(content)),
+            {"a": [{"b": ['<img src="x">']}], "n": 1},
+        )
+
+    def test_a_value_that_is_not_json_is_sanitized_as_html(self) -> None:
+        self.assertNotIn("onerror", sanitize_json_html("<img src=x onerror=1> ["))
+        self.assertEqual(sanitize_json_html("not json"), "not json")
+
+
 class _FakeMeta:
     def __init__(self, fields):
         self._fields = fields
@@ -151,6 +351,8 @@ class _FakeDoc:
     """A document with controlled field metadata, so each skip branch of
     _sanitize_doc can be exercised without depending on a real doctype having a
     field with that exact fieldtype, option or flag."""
+
+    doctype = "Fake"
 
     def __init__(self, values, fields, docstatus=0, children=None):
         self._values = dict(values)
