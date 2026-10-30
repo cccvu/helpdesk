@@ -1001,3 +1001,45 @@ def web_form_published(name: str, published: bool | int):
         yield
     finally:
         frappe.db.set_value("Web Form", name, "published", previous)
+
+
+@contextmanager
+def ticket_reader_role(role: str, users=(), rights=("read",), listed: bool = True):
+    """Within the block, `role` exists (with desk access), each of `users`
+    holds it, its level-0 row on HD Ticket (a Custom DocPerm) has `rights`,
+    and HD Settings lists it as a ticket reader role unless `listed` is off.
+    Restores the DocPerms and the setting afterwards; the users keep it."""
+    from frappe.permissions import setup_custom_perms
+
+    if not frappe.db.exists("Role", role):
+        frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(
+            ignore_permissions=True
+        )
+    for email in users:
+        create_user(email).add_roles(role)
+    created = setup_custom_perms("HD Ticket")
+    row = frappe.get_doc(
+        {
+            "doctype": "Custom DocPerm",
+            "parent": "HD Ticket",
+            "parenttype": "DocType",
+            "parentfield": "permissions",
+            "role": role,
+            "permlevel": 0,
+            **{right: 1 for right in rights},
+        }
+    ).insert(ignore_permissions=True)
+    previous = frappe.db.get_single_value("HD Settings", "ticket_reader_roles")
+    frappe.db.set_single_value(
+        "HD Settings", "ticket_reader_roles", role if listed else None
+    )
+    frappe.clear_cache(doctype="HD Ticket")
+    try:
+        yield role
+    finally:
+        frappe.db.set_single_value("HD Settings", "ticket_reader_roles", previous)
+        if created:
+            frappe.db.delete("Custom DocPerm", {"parent": "HD Ticket"})
+        else:
+            frappe.db.delete("Custom DocPerm", {"name": row.name})
+        frappe.clear_cache(doctype="HD Ticket")

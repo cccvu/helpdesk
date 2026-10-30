@@ -22,6 +22,7 @@ from helpdesk.helpdesk.doctype.hd_settings.helpers import (
     get_rendered_banner_msg,
 )
 from helpdesk.helpdesk.doctype.hd_ticket.api import (
+    get_ticket_activities,
     merge_ticket,
     new,
     show_outside_hours_banner,
@@ -31,6 +32,7 @@ from helpdesk.helpdesk.doctype.hd_ticket.hd_ticket import (
     FEEDBACK_WEB_FORM,
     close_tickets_after_n_days,
     has_permission,
+    is_ticket_reader,
     permission_query,
 )
 from helpdesk.test_utils import (
@@ -48,6 +50,7 @@ from helpdesk.test_utils import (
     get_current_week_monday,
     get_latest_ticket_communication,
     get_priority_response_resolution_time,
+    insert_as,
     make_agent,
     make_agent_manager,
     make_priority,
@@ -58,6 +61,8 @@ from helpdesk.test_utils import (
     make_ticket,
     remove_holidays,
     set_ticket_status_and_communication_date,
+    set_value_as,
+    ticket_reader_role,
     update_role_in_customer,
     upload_test_file,
     web_form_published,
@@ -3415,3 +3420,139 @@ class TestTicketDeleteRights(FrappeTestCase):
             with self.subTest(ptype=ptype):
                 self.assertTrue(has_permission(ticket, user=self.agent, ptype=ptype))
         self.assertTrue(has_permission(ticket, user=self.manager, ptype="delete"))
+
+
+READER_ROLE = "Test Ticket Reader"
+WRITE_RIGHTS = ("write", "create", "delete", "share", "email", "print", "export")
+
+
+class TestTicketReaders(FrappeTestCase):
+    """A role HD Settings lists as a ticket reader role reads every ticket an
+    agent would, and does nothing else with one."""
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        self.reader = "ticket_reader@example.com"
+        self.requester = create_user("ticket_reader_requester@example.com").name
+        self.agent = make_agent("ticket_reader_agent@example.com")
+        self.ticket = make_ticket(raised_by=self.requester)
+        add_comment(self.ticket.name, "Internal note")
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def readers(self, **kwargs):
+        return ticket_reader_role(READER_ROLE, users=[self.reader], **kwargs)
+
+    def test_reader_reads_any_ticket(self):
+        with self.readers():
+            self.assertTrue(is_ticket_reader(self.reader))
+            for ptype in ("read", "select"):
+                self.assertTrue(
+                    frappe.has_permission(
+                        "HD Ticket", ptype, doc=self.ticket.name, user=self.reader
+                    ),
+                    ptype,
+                )
+            self.assertIsNone(permission_query(self.reader), "agents' visibility")
+            frappe.set_user(self.reader)
+            self.assertIn(self.ticket.name, frappe.get_list("HD Ticket", pluck="name"))
+
+    def test_role_reads_nothing_unless_listed(self):
+        with self.readers(listed=False):
+            self.assertFalse(is_ticket_reader(self.reader))
+            self.assertFalse(
+                frappe.has_permission(
+                    "HD Ticket", "read", doc=self.ticket.name, user=self.reader
+                )
+            )
+            frappe.set_user(self.reader)
+            self.assertNotIn(
+                self.ticket.name, frappe.get_list("HD Ticket", pluck="name")
+            )
+
+    def test_reader_does_nothing_else_whatever_its_docperms(self):
+        with self.readers(rights=("read", "select", "report", *WRITE_RIGHTS)):
+            for ptype in WRITE_RIGHTS:
+                self.assertFalse(
+                    frappe.has_permission(
+                        "HD Ticket", ptype, doc=self.ticket.name, user=self.reader
+                    ),
+                    ptype,
+                )
+            with self.assertRaises(frappe.PermissionError):
+                set_value_as(
+                    self.reader, "HD Ticket", self.ticket.name, {"subject": "Changed"}
+                )
+            with self.assertRaises(frappe.PermissionError):
+                insert_as(
+                    self.reader,
+                    {"doctype": "HD Ticket", "subject": "New", "description": "x"},
+                )
+            with self.assertRaises(frappe.PermissionError):
+                delete_doc_as(self.reader, "HD Ticket", self.ticket.name)
+
+        self.assertEqual(
+            frappe.db.get_value("HD Ticket", self.ticket.name, "subject"),
+            self.ticket.subject,
+        )
+
+    def test_reader_cannot_write_its_own_ticket(self):
+        mine = make_ticket(raised_by=create_user(self.reader).name)
+        with self.readers(rights=("read", "write")):
+            self.assertFalse(
+                frappe.has_permission(
+                    "HD Ticket", "write", doc=mine.name, user=self.reader
+                )
+            )
+
+    def test_reader_reads_no_notes_or_activity(self):
+        with self.readers():
+            self.assertFalse(
+                frappe.has_permission("HD Ticket Comment", "read", user=self.reader)
+            )
+            self.assertFalse(
+                frappe.has_permission("HD Ticket Activity", "read", user=self.reader)
+            )
+            frappe.set_user(self.reader)
+            activities = get_ticket_activities(self.ticket.name)
+        self.assertEqual(activities["comments"], [])
+        self.assertEqual(activities["history"], [])
+
+    def test_reader_cannot_reply_assign_or_mark_seen(self):
+        communications = frappe.db.count(
+            "Communication", {"reference_name": self.ticket.name}
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            ticket = frappe.get_doc("HD Ticket", self.ticket.name)
+            for call in (
+                lambda: ticket.create_communication_via_contact(message="Reply"),
+                lambda: ticket.assign_agent(self.agent),
+                ticket.mark_seen,
+            ):
+                with self.assertRaises(frappe.PermissionError):
+                    call()
+            frappe.set_user("Administrator")
+
+        self.assertEqual(
+            frappe.db.count("Communication", {"reference_name": self.ticket.name}),
+            communications,
+        )
+        self.assertFalse(
+            frappe.get_doc("HD Ticket", self.ticket.name).get_assigned_agents()
+        )
+
+    def test_agents_are_never_readers(self):
+        with ticket_reader_role(READER_ROLE, users=[self.agent]):
+            self.assertFalse(is_ticket_reader(self.agent))
+            self.assertTrue(
+                frappe.has_permission(
+                    "HD Ticket", "write", doc=self.ticket.name, user=self.agent
+                )
+            )
+
+    def test_roles_every_user_holds_are_ignored(self):
+        with hd_settings(ticket_reader_roles="All\nGuest\nDesk User\n"):
+            self.assertFalse(is_ticket_reader(self.requester))
+            self.assertFalse(is_ticket_reader("Guest"))

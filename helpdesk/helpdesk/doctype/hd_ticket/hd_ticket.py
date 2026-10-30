@@ -13,6 +13,7 @@ from frappe.desk.form.assign_to import get as get_assignees
 from frappe.email.email_body import EMBED_PATTERN, get_message_id
 from frappe.model.document import Document
 from frappe.permissions import (
+    AUTOMATIC_ROLES,
     add_permission,
     setup_custom_perms,
     update_permission_property,
@@ -571,6 +572,7 @@ class HDTicket(Document):
 
     @frappe.whitelist()
     def assign_agent(self, agent: str):
+        refuse_ticket_readers()
         assign({"assign_to": [agent], "doctype": "HD Ticket", "name": self.name})
 
         if frappe.session.user != agent:
@@ -912,6 +914,7 @@ class HDTicket(Document):
         # and work on the stored ticket, never a client-built or unsaved one.
         if self.is_new():
             frappe.throw(_("Not permitted"), frappe.PermissionError)
+        refuse_ticket_readers()
         frappe.has_permission("HD Ticket", "read", self.name, throw=True)
         self.reload()
         self._create_communication_via_contact(message, attachments)
@@ -1086,6 +1089,7 @@ class HDTicket(Document):
 
     @frappe.whitelist()
     def mark_seen(self):
+        refuse_ticket_readers()
         self.add_viewed(
             unique_views=True, force=True
         )  # Document class method, no way to add unique_views via document settings, hence used force and unique_views=True
@@ -1483,6 +1487,9 @@ def has_permission(doc, user=None, ptype=None):
         return False
     if is_admin(user):
         return True
+    if is_ticket_reader(user):
+        # Read only, whatever else the user's roles or own tickets would allow.
+        return (ptype or "read") in READER_PTYPES and _agent_has_permission(doc, user)
     if user in (doc.contact, doc.raised_by, doc.owner):
         return True
     if _is_customer_manager(doc.customer, user):
@@ -1532,9 +1539,44 @@ def permission_query(user: str | None = None):
     user = user or frappe.session.user
     if is_admin(user):
         return
+    if is_ticket_reader(user):
+        return _agent_query(user)
     if not is_agent(user):
         return _customer_query(user)
     return _agent_query(user)
+
+
+# What a ticket reader may do with a ticket.
+READER_PTYPES = frozenset({"read", "select"})
+
+
+def get_ticket_reader_roles() -> set[str]:
+    """HD Settings' ticket reader roles, one per line. A role every user holds
+    (All, Guest, Desk User) is ignored: it would make everyone a reader."""
+    value = frappe.db.get_single_value("HD Settings", "ticket_reader_roles") or ""
+    roles = {line.strip() for line in value.splitlines()}
+    return roles - {""} - set(AUTOMATIC_ROLES)
+
+
+def is_ticket_reader(user: str | None = None) -> bool:
+    """Whether `user` is not an agent and holds one of the ticket reader roles.
+
+    A reader reads every ticket an agent would (with the DocPerms that let its
+    role read HD Ticket) and nothing else: no change, creation, deletion,
+    share, email, print or export of a ticket, and no reply or assignment on
+    one. Notes and activity follow their own role permissions."""
+    user = user or frappe.session.user
+    roles = get_ticket_reader_roles()
+    if not roles or is_agent(user):
+        return False
+    return bool(roles.intersection(frappe.get_roles(user)))
+
+
+def refuse_ticket_readers():
+    """Refuse a ticket reader a method that acts on a ticket it may only read:
+    Frappe runs a document's whitelisted methods for anyone who may read it."""
+    if is_ticket_reader():
+        frappe.throw(_("Not permitted"), frappe.PermissionError)
 
 
 def _customer_query(user: str) -> str:
