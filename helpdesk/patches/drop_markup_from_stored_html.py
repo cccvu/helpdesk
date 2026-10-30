@@ -1,38 +1,63 @@
+import json
+
 import frappe
 from frappe.utils.html_utils import sanitize_html
 
 from helpdesk.extends.document import (
+    CONTROLLER_SANITIZED_FIELDS,
     JSON_HTML_FIELDS,
+    MARKUP,
     drop_markup_data,
+    iter_elements,
+    parse_fragment,
     sanitize_json_html,
+    sanitize_markup,
+    serialize_fragment,
 )
 
 BATCH_SIZE = 500
+# What a value drop_markup_data changes must contain: a data-* attribute, the
+# mention class, or a character reference that could spell either.
+NEEDLES = ("data-", "mention", "&#")
 
 
 def execute():
     """Sanitize stored values again where the save-time sanitizer now does more.
 
-    Text Editor fields (standard and custom) whose value has a data-* attribute
-    or mention text with markup (helpdesk.extends.document.drop_markup_data),
-    and the JSON fields whose strings are HTML (JSON_HTML_FIELDS). Only rows
-    whose value changes are written, each with what a save would store now,
-    and only if the value is still the one read, so an edit made meanwhile by a
-    running release is kept. The modified time is not touched, and a second run
-    changes nothing. Rows are read in batches of BATCH_SIZE, and only those
-    whose value could need it.
+    Text Editor fields (standard and custom), and the fields their controller
+    sanitizes (CONTROLLER_SANITIZED_FIELDS), whose value has a data-* attribute
+    or mention text with markup (helpdesk.extends.document.drop_markup_data);
+    then the JSON fields whose strings are HTML (JSON_HTML_FIELDS), whose
+    attribute quotes the earlier whole-value sanitizing rewrote
+    (class='"h4"') are put back too. Only rows whose value changes are
+    written, each with what a save would store now, and only if the value is
+    still the one read, so an edit made meanwhile by a running release is kept.
+    Unlike a save, this also cleans cancelled and submitted rows: a stored
+    value runs wherever it is shown. The modified time is not touched, and a
+    second run changes nothing. Rows are read in batches of BATCH_SIZE, and
+    only those whose value could need it. A value that can't be cleaned (JSON
+    nested too deeply) is named and left for a person.
     """
-    for doctype, fieldname in text_editor_fields():
-        changed = resanitize(
-            doctype, fieldname, clean_text_editor, ("data-", "mention")
-        )
-        if changed:
-            print(f"Sanitized {changed} {doctype}.{fieldname} value(s) again")
+    fields = [(dt, f, clean_text_editor) for dt, f in text_editor_fields()]
+    fields += [
+        (dt, f, clean_controller_sanitized)
+        for dt, f in sorted(CONTROLLER_SANITIZED_FIELDS)
+    ]
+    for doctype, fieldname, clean in fields:
+        if column_exists(doctype, fieldname):
+            report(doctype, fieldname, resanitize(doctype, fieldname, clean, NEEDLES))
     for doctype, fieldname in sorted(JSON_HTML_FIELDS):
-        if frappe.db.table_exists(doctype) and frappe.db.has_column(doctype, fieldname):
-            changed = resanitize(doctype, fieldname, clean_json_html)
-            if changed:
-                print(f"Sanitized {changed} {doctype}.{fieldname} value(s) again")
+        if column_exists(doctype, fieldname):
+            report(doctype, fieldname, resanitize(doctype, fieldname, clean_json_html))
+
+
+def column_exists(doctype, fieldname):
+    return frappe.db.table_exists(doctype) and frappe.db.has_column(doctype, fieldname)
+
+
+def report(doctype, fieldname, changed):
+    if changed:
+        print(f"Sanitized {changed} {doctype}.{fieldname} value(s) again")
 
 
 def text_editor_fields():
@@ -71,9 +96,49 @@ def clean_text_editor(value):
     return cleaned if cleaned != sanitized else None
 
 
-def clean_json_html(value):
-    cleaned = sanitize_json_html(value)
+def clean_controller_sanitized(value):
+    cleaned = drop_markup_data(value)
     return cleaned if cleaned != value else None
+
+
+def clean_json_html(value):
+    """sanitize_json_html, after putting back the attribute quotes the earlier
+    whole-value sanitizing rewrote."""
+    repaired = sanitize_json_html(value)
+    try:
+        data = json.loads(repaired)
+    except ValueError:
+        return repaired if repaired != value else None
+    fixed = _map_strings(data, unquote_attributes)
+    if fixed != data:
+        repaired = json.dumps(fixed, ensure_ascii=False, separators=(",", ":"))
+    return repaired if repaired != value else None
+
+
+def _map_strings(node, fn):
+    if isinstance(node, str):
+        return fn(node)
+    if isinstance(node, list):
+        return [_map_strings(item, fn) for item in node]
+    if isinstance(node, dict):
+        return {key: _map_strings(item, fn) for key, item in node.items()}
+    return node
+
+
+def unquote_attributes(html):
+    """html with each attribute value wrapped in literal double quotes unwrapped:
+    sanitizing a JSON text as HTML read class=\\"h4\\" as the value "h4",
+    quotes included. Sanitized again, so bleach writes the result."""
+    if not MARKUP.search(html):
+        return html
+    fragment = parse_fragment(html)
+    changed = False
+    for element in iter_elements(fragment):
+        for name, value in list(element.attrib.items()):
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                element.set(name, value[1:-1])
+                changed = True
+    return sanitize_markup(serialize_fragment(fragment)) if changed else html
 
 
 def resanitize(doctype, fieldname, clean, needles=()):
@@ -98,7 +163,12 @@ def resanitize(doctype, fieldname, clean, needles=()):
         if not rows:
             return changed
         for name, value in rows:
-            cleaned = clean(value) if isinstance(value, str) else None
+            try:
+                cleaned = clean(value) if isinstance(value, str) else None
+            except frappe.ValidationError:
+                print(f"Left {doctype} {name}: its {fieldname} can't be cleaned")
+                frappe.clear_messages()
+                cleaned = None
             if cleaned is not None:
                 changed += write_if_unchanged(doctype, fieldname, name, value, cleaned)
         last = rows[-1][0]

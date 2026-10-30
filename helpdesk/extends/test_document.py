@@ -6,7 +6,10 @@ from frappe.tests.utils import FrappeTestCase
 
 from helpdesk.extends.document import (
     _sanitize_doc,
+    _text,
     drop_markup_data,
+    iter_elements,
+    parse_fragment,
     sanitize_html_fields,
     sanitize_json_html,
 )
@@ -169,24 +172,83 @@ QUILL_MENTION = (
 )
 
 
-def _decoded(html):
-    """Every attribute value and text node of html, as the browser decodes them."""
-    from bs4 import BeautifulSoup
+def assert_no_live_mention_markup(test, html):
+    """Re-parse html as a browser does (HTML5, foreign content, references
+    decoded): no data-* value anywhere, and no mention's text, holds markup."""
+    for element in iter_elements(parse_fragment(html)):
+        for name, value in element.attrib.items():
+            if name.rsplit("}", 1)[-1].startswith("data-"):
+                test.assertNotRegex(value, "[<>]", html)
+        if "mention" in (element.get("class") or "").split():
+            test.assertNotRegex(_text(element), "[<>]", html)
 
-    soup = BeautifulSoup(html, "html.parser")
-    values = [soup.get_text()]
-    for tag in soup.find_all(True):
-        values += [
-            " ".join(v) if isinstance(v, list) else v for v in tag.attrs.values()
-        ]
-    return values
+
+# Shapes a raw-substring check or Python's html.parser missed: the class spelled
+# with a character reference, and mentions inside SVG and MathML, whose content
+# a browser parses as foreign content (HTML inside an SVG title or MathML mtext;
+# a foreign style's text decoded).
+BYPASSES = {
+    "decimal reference": f'<p><span class="&#109;ention">{ENCODED_IMG}</span></p>',
+    "hex reference": f'<p><span class="&#x6d;ention x">{ENCODED_IMG}</span></p>',
+    "partial reference": f'<p><span class="men&#116;ion">{ENCODED_IMG}</span></p>',
+    "svg title data": (
+        f'<svg><title><span class="mention" data-value="{ENCODED_IMG}">@x</span>'
+        "</title></svg>"
+    ),
+    "svg title text": (
+        f'<svg><title><a class="mention">{ENCODED_IMG}</a></title></svg>'
+    ),
+    "svg desc text": (
+        f'<svg><desc><span class="mention">{ENCODED_IMG}</span></desc></svg>'
+    ),
+    "svg style text": (
+        f'<span class="mention"><svg><style>{ENCODED_IMG}</style></svg></span>'
+    ),
+    "math style text": (
+        f'<span class="mention"><math><style>{ENCODED_IMG}</style></math></span>'
+    ),
+    "mtext data": (
+        f'<math><mtext><span class="mention" data-label="{ENCODED_IMG}">@x</span>'
+        "</mtext></math>"
+    ),
+}
 
 
 class TestDropMarkupData(FrappeTestCase):
-    def assertNoDecodedMarkup(self, html):
-        for value in _decoded(html):
-            if "mention" in html or "data-" in html:
-                self.assertNotRegex(value, "[<>]", html)
+    def test_no_shape_keeps_live_mention_markup(self) -> None:
+        for label, payload in {
+            **BYPASSES,
+            **MENTION_DATA,
+            "text": MENTION_TEXT,
+        }.items():
+            with self.subTest(label):
+                doc = frappe.get_doc(
+                    {"doctype": "HD Ticket", "subject": "x", "description": payload}
+                )
+                sanitize_html_fields(doc)
+                assert_no_live_mention_markup(self, doc.description)
+
+    def test_comment_content_is_defused_though_its_controller_sanitizes(self) -> None:
+        # Comment.content has ignore_xss_filter, and /app's timeline loads every
+        # comment into a mention-enabled editor for every viewer.
+        for label, payload in {"text": MENTION_TEXT, **BYPASSES}.items():
+            with self.subTest(label):
+                doc = frappe.get_doc(
+                    {
+                        "doctype": "Comment",
+                        "comment_type": "Comment",
+                        "reference_doctype": "HD Ticket",
+                        "content": payload,
+                    }
+                )
+                sanitize_html_fields(doc)
+                assert_no_live_mention_markup(self, doc.content)
+        real = f"<p>{make_mention_html('agent@example.com', 'Ann Lee')} hi</p>"
+        doc = frappe.get_doc(
+            {"doctype": "Comment", "comment_type": "Comment", "content": real}
+        )
+        sanitize_html_fields(doc)
+        self.assertEqual(doc.content, real)
 
     def test_markup_in_a_mention_data_attribute_is_dropped(self) -> None:
         for attribute, payload in MENTION_DATA.items():
@@ -330,6 +392,25 @@ class TestSanitizeJsonHtml(FrappeTestCase):
             json.loads(sanitize_json_html(content)),
             {"a": [{"b": ['<img src="x">']}], "n": 1},
         )
+
+    def test_json_too_deeply_nested_is_refused(self) -> None:
+        # A RecursionError used to fall back to the HTML check, which can't see
+        # JSON-escaped markup, and the value was stored unchanged.
+        for depth in (33, 600, 5000):
+            with self.subTest(depth=depth):
+                deep = (
+                    "[" * depth
+                    + '"'
+                    + _json_escaped("<img onerror=x>")
+                    + '"'
+                    + "]" * depth
+                )
+                with self.assertRaises(frappe.ValidationError):
+                    sanitize_json_html(deep)
+
+    def test_json_at_the_depth_limit_is_walked(self) -> None:
+        deep = "[" * 31 + json.dumps({"t": "<b onclick=x>b</b>"}) + "]" * 31
+        self.assertNotIn("onclick", sanitize_json_html(deep))
 
     def test_a_value_that_is_not_json_is_sanitized_as_html(self) -> None:
         self.assertNotIn("onerror", sanitize_json_html("<img src=x onerror=1> ["))

@@ -110,6 +110,85 @@ class TestDropMarkupFromStoredHtml(FrappeTestCase):
             side_effect=AssertionError("the second run wrote a row"),
         )
 
+    def test_other_shapes_and_fields_are_cleaned(self) -> None:
+        # The class spelled with a character reference, a Comment (its own
+        # sanitizer keeps mention markup), and a saved List Filter.
+        encoded = f'<p><span class="&#109;ention">{ENCODED_IMG}</span></p>'
+        frappe.db.set_value(
+            "HD Ticket", self.ticket.name, "description", encoded, update_modified=False
+        )
+        comment = frappe.get_doc(
+            {
+                "doctype": "Comment",
+                "comment_type": "Comment",
+                "reference_doctype": "HD Ticket",
+                "reference_name": self.ticket.name,
+                "content": "<p>x</p>",
+            }
+        ).insert(ignore_permissions=True)
+        frappe.db.set_value(
+            "Comment", comment.name, "content", PLANTED, update_modified=False
+        )
+        list_filter = frappe.get_doc(
+            {
+                "doctype": "List Filter",
+                "reference_doctype": "HD Ticket",
+                "filter_name": "patch test",
+                "filters": "[]",
+            }
+        ).insert(ignore_permissions=True)
+        planted_filter = escaped(
+            json.dumps([["HD Ticket", "<img onerror=x>", "=", "1"]])
+        )
+        frappe.db.set_value(
+            "List Filter",
+            list_filter.name,
+            "filters",
+            planted_filter,
+            update_modified=False,
+        )
+        self.run_patch()
+        self.assertNotIn(
+            "&#109;ention",
+            frappe.db.get_value("HD Ticket", self.ticket.name, "description"),
+        )
+        content = frappe.db.get_value("Comment", comment.name, "content")
+        self.assertNotIn("data-value", content)
+        self.assertNotIn(f'class="mention">{ENCODED_IMG}', content)
+        filters = frappe.db.get_value("List Filter", list_filter.name, "filters")
+        self.assertNotIn("onerror", json.loads(filters)[0][1])
+
+    def test_quotes_the_earlier_sanitizer_rewrote_are_put_back(self) -> None:
+        mangled = json.dumps(
+            [
+                {
+                    "id": "h",
+                    "type": "header",
+                    "data": {
+                        "text": "<span class='\"h4\"'><a href='\"/helpdesk\"'>Go</a></span>"
+                    },
+                }
+            ]
+        )
+        frappe.db.set_value(
+            "Workspace", self.workspace.name, "content", mangled, update_modified=False
+        )
+        self.run_patch()
+        text = json.loads(
+            frappe.db.get_value("Workspace", self.workspace.name, "content")
+        )[0]["data"]["text"]
+        self.assertEqual(text, '<span class="h4"><a href="/helpdesk">Go</a></span>')
+
+    def test_a_value_too_deep_to_clean_is_left_and_named(self) -> None:
+        deep = "[" * 40 + '"' + escaped("<img onerror=x>") + '"' + "]" * 40
+        frappe.db.set_value(
+            "Workspace", self.workspace.name, "content", deep, update_modified=False
+        )
+        self.run_patch()
+        self.assertEqual(
+            frappe.db.get_value("Workspace", self.workspace.name, "content"), deep
+        )
+
     def test_covers_the_text_editor_fields(self) -> None:
         fields = patch.text_editor_fields()
         for field in (
