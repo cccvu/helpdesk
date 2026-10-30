@@ -3669,10 +3669,11 @@ class TestTicketReaders(FrappeTestCase):
             self.assertEqual(find_file_by_url(on_ticket.file_url).name, on_ticket.name)
 
     def test_reader_zips_only_the_files_of_a_tickets_emails(self):
+        """Through Frappe's dispatch, under each name a client may call it by."""
         import io
         import zipfile
 
-        from helpdesk.overrides.file import zip_files
+        from frappe.handler import execute_cmd
 
         on_ticket = make_private_file(
             "Administrator",
@@ -3681,22 +3682,32 @@ class TestTicketReaders(FrappeTestCase):
             file_name="ticket-own.txt",
         )
 
-        def zipped_as(user):
+        def zipped_as(user, cmd):
             frappe.set_user(user)
             frappe.local.response = frappe._dict()
-            zip_files(frappe.as_json([on_ticket.name]))
+            frappe.local.form_dict = frappe._dict(
+                files=frappe.as_json([on_ticket.name])
+            )
+            frappe.local.request = frappe._dict(method="POST")
+            try:
+                execute_cmd(cmd)
+            finally:
+                del frappe.local.request
             content = frappe.local.response.filecontent
             return zipfile.ZipFile(io.BytesIO(content)).namelist()
 
-        with self.readers():
-            self.assertEqual(zipped_as(self.reader), [])
-            self.assertEqual(zipped_as(self.agent), ["ticket-own.txt"])
-        self.assertEqual(
-            frappe.get_hooks("override_whitelisted_methods")[
-                "frappe.core.api.file.zip_files"
-            ],
-            ["helpdesk.overrides.file.zip_files"],
-        )
+        for cmd in (
+            "frappe.core.api.file.zip_files",
+            "frappe.core.doctype.file.file.zip_files",
+        ):
+            with self.subTest(cmd=cmd), self.readers():
+                self.assertEqual(
+                    frappe.override_whitelisted_method(cmd),
+                    "helpdesk.overrides.file.zip_files",
+                )
+                self.assertEqual(zipped_as(self.reader, cmd), [])
+                self.assertEqual(zipped_as(self.agent, cmd), ["ticket-own.txt"])
+            frappe.set_user("Administrator")
 
     def test_reader_adds_no_file(self):
         on_ticket = make_private_file(
