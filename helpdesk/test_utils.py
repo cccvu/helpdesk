@@ -989,3 +989,15 @@ def rename_doc_as(user: str, doctype: str, old_name: str, new_name: str):
         return rename_doc(doctype, old_name, new_name)
     finally:
         frappe.set_user(previous)
+
+
+@contextmanager
+def web_form_published(name: str, published: bool | int):
+    """Within the block, the Web Form `name` is published or not. Restores it
+    afterwards."""
+    previous = frappe.db.get_value("Web Form", name, "published")
+    frappe.db.set_value("Web Form", name, "published", int(published))
+    try:
+        yield
+    finally:
+        frappe.db.set_value("Web Form", name, "published", previous)

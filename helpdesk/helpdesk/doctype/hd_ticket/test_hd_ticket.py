@@ -28,6 +28,7 @@ from helpdesk.helpdesk.doctype.hd_ticket.api import (
     split_ticket,
 )
 from helpdesk.helpdesk.doctype.hd_ticket.hd_ticket import (
+    FEEDBACK_WEB_FORM,
     close_tickets_after_n_days,
     has_permission,
     permission_query,
@@ -37,6 +38,7 @@ from helpdesk.test_utils import (
     add_comment,
     add_contact_in_customer,
     add_holiday,
+    add_message,
     create_contact,
     create_customer,
     create_user,
@@ -58,6 +60,7 @@ from helpdesk.test_utils import (
     set_ticket_status_and_communication_date,
     update_role_in_customer,
     upload_test_file,
+    web_form_published,
 )
 from helpdesk.utils import is_agent
 
@@ -199,6 +202,39 @@ def hd_settings(**values):
     finally:
         # rollback is per test class, so restore or later tests inherit this
         frappe.db.set_single_value("HD Settings", previous)
+
+
+FEEDBACK_HEADER = "hd-email-feedback"
+FEEDBACK_FAILED = "Feedback email could not be queued"
+
+
+def feedback_mails(sendmail) -> list[dict]:
+    """The kwargs of each feedback email a patched frappe.sendmail was called with."""
+    return [
+        c.kwargs
+        for c in sendmail.call_args_list
+        if (c.kwargs.get("email_headers") or {}).get("X-Auto-Generated")
+        == FEEDBACK_HEADER
+    ]
+
+
+@contextmanager
+def feedback_on(published: bool = True, **values):
+    """Send the feedback email when a ticket is closed, with HD Settings
+    `values` and the feedback web form `published` or not; restore both after."""
+    with (
+        hd_settings(
+            enable_email_ticket_feedback=1, send_email_feedback_on_status="", **values
+        ),
+        web_form_published(FEEDBACK_WEB_FORM, published),
+    ):
+        yield
+
+
+def close_ticket(ticket) -> None:
+    ticket.reload()
+    ticket.status = "Closed"
+    ticket.save()
 
 
 TEMPLATE_FAILED = "Email template could not be rendered"
@@ -1662,11 +1698,7 @@ class TestHDTicket(FrappeTestCase):
         ticket.reload()
         todos = frappe.db.count("ToDo")
         with (
-            hd_settings(
-                enable_email_ticket_feedback=1,
-                send_email_feedback_on_status="",
-                feedback_email_content=HOSTILE_CONTENT,
-            ),
+            feedback_on(feedback_email_content=HOSTILE_CONTENT),
             patch("frappe.sendmail") as sendmail,
         ):
             ticket.status = "Closed"
@@ -1677,6 +1709,129 @@ class TestHDTicket(FrappeTestCase):
         self.assertIn("We’d love your feedback", message)
         self.assertIn(f"/ticket-feedback/new?key={ticket.key}", message)
         self.assertEqual(frappe.db.count("ToDo"), todos)
+
+    def test_feedback_email_is_threaded_with_the_reply_to_template(self):
+        """Like the acknowledgement: the Reply-To template applies, and the mail
+        replies to the newest communication that has a Message-ID."""
+        ticket = make_ticket()
+        add_message(ticket.name, "Sent", agent, subject="Agent reply")
+        threadable = frappe.db.get_value(
+            "Communication",
+            {"reference_name": ticket.name, "subject": "Agent reply"},
+            "name",
+        )
+        frappe.db.set_value(
+            "Communication", threadable, "message_id", "reply-1@example.com"
+        )
+        add_message(ticket.name, "Received", ticket.raised_by, subject="No id")
+        with (
+            feedback_on(reply_to_template="support+{{ doc.name }}@example.com"),
+            patch("frappe.sendmail") as sendmail,
+        ):
+            close_ticket(ticket)
+
+        [sent] = feedback_mails(sendmail)
+        self.assertEqual(sent["recipients"], [ticket.raised_by])
+        self.assertEqual(sent["reply_to"], f"support+{ticket.name}@example.com")
+        self.assertEqual(sent["in_reply_to"], threadable)
+        self.assertFalse(sent.get("now"), "the feedback email is queued")
+
+    def test_feedback_email_is_queued_with_the_status_change(self):
+        ticket = make_ticket()
+        with (
+            feedback_on(reply_to_template="support+{{ doc.name }}@example.com"),
+            patch("frappe.are_emails_muted", return_value=False),
+            patch.object(frappe.db, "commit") as commit,
+        ):
+            close_ticket(ticket)
+
+        commit.assert_not_called()
+        queued = [
+            row
+            for row in frappe.get_all(
+                "Email Queue",
+                filters={
+                    "reference_doctype": "HD Ticket",
+                    "reference_name": ticket.name,
+                },
+                fields=["status", "message"],
+            )
+            if FEEDBACK_HEADER in (row.message or "")
+        ]
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].status, "Not Sent")
+        self.assertEqual(
+            message_from_string(queued[0].message)["Reply-To"],
+            f"support+{ticket.name}@example.com",
+        )
+
+    def test_feedback_email_has_no_link_while_its_form_is_unpublished(self):
+        """The link carries the ticket's key, and leads nowhere without the form."""
+        ticket = make_ticket()
+        with (
+            feedback_on(
+                published=False, feedback_email_content="<p>Rate us: {{ url }}</p>"
+            ),
+            patch("frappe.sendmail") as sendmail,
+        ):
+            close_ticket(ticket)
+
+        [sent] = feedback_mails(sendmail)
+        self.assertNotIn(ticket.key, sent["message"])
+        self.assertNotIn("/ticket-feedback/", sent["message"])
+
+    def test_feedback_failure_is_logged_and_does_not_block_the_save(self):
+        def sendmail(**kwargs):
+            if (kwargs.get("email_headers") or {}).get(
+                "X-Auto-Generated"
+            ) == FEEDBACK_HEADER:
+                raise Exception("mail server refused the message")
+
+        ticket = make_ticket()
+        before = set(frappe.get_all("Error Log", pluck="name"))
+        with feedback_on(), patch("frappe.sendmail", side_effect=sendmail):
+            close_ticket(ticket)
+
+        self.assertEqual(
+            frappe.db.get_value("HD Ticket", ticket.name, "status"), "Closed"
+        )
+        self.assertEqual(
+            [
+                (log.method, log.reference_doctype, log.reference_name)
+                for log in new_error_logs(before)
+            ],
+            [(FEEDBACK_FAILED, "HD Ticket", ticket.name)],
+        )
+
+    def test_feedback_deadlock_fails_the_save(self):
+        """A deadlock loses the transaction, so the caller must retry it."""
+        ticket = make_ticket()
+        with (
+            feedback_on(),
+            patch("frappe.sendmail", side_effect=frappe.QueryDeadlockError),
+            self.assertRaises(frappe.QueryDeadlockError),
+        ):
+            close_ticket(ticket)
+
+    def test_no_feedback_email_for_a_merged_ticket(self):
+        source = make_ticket(subject="Source")
+        target = make_ticket(subject="Target")
+        with feedback_on(), patch("frappe.sendmail") as sendmail:
+            merge_ticket(source=source.name, target=target.name)
+
+        self.assertTrue(frappe.db.get_value("HD Ticket", source.name, "is_merged"))
+        self.assertEqual(feedback_mails(sendmail), [])
+
+    def test_no_feedback_email_during_an_import_or_patch(self):
+        for flag in ("in_import", "in_patch"):
+            ticket = make_ticket()
+            with feedback_on(), patch("frappe.sendmail") as sendmail:
+                setattr(frappe.flags, flag, True)
+                try:
+                    close_ticket(ticket)
+                finally:
+                    setattr(frappe.flags, flag, False)
+            self.assertEqual(feedback_mails(sendmail), [], flag)
 
     def test_reply_to_template_renders_with_data_only(self):
         ticket = make_ticket()

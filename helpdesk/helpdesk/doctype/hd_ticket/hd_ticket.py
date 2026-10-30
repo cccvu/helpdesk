@@ -56,6 +56,9 @@ from helpdesk.utils import (
 from ..hd_notification.utils import clear as clear_notifications
 from ..hd_service_level_agreement.utils import get_sla
 
+# The web form the feedback email links to.
+FEEDBACK_WEB_FORM = "email-feedback"
+
 
 class HDTicket(Document):
     @property
@@ -151,6 +154,10 @@ class HDTicket(Document):
             or self.feedback_rating
             or not self.has_value_changed("status")
             or not self.key
+            # a merged ticket's requester follows its merge target
+            or self.is_merged
+            or frappe.flags.in_import
+            or frappe.flags.in_patch
         ):
             return
 
@@ -169,13 +176,19 @@ class HDTicket(Document):
         if not send_feedback_email:
             return
 
-        last_communication = self.get_last_communication()
-
-        url = f"{frappe.utils.get_url()}/ticket-feedback/new?key={self.key}"
+        # The link opens the feedback web form with the ticket's key, so it is
+        # only offered while that form is published.
+        args = {}
+        if frappe.db.get_value("Web Form", FEEDBACK_WEB_FORM, "published"):
+            args["url"] = f"{frappe.utils.get_url()}/ticket-feedback/new?key={self.key}"
         feedback_email_content = frappe.db.get_single_value(
             "HD Settings", "feedback_email_content"
         )
         default_feedback_email_content = get_default_email_content("share_feedback")
+
+        # Like the acknowledgement, the feedback email is best-effort and
+        # queued: it commits with the status change, and the email queue sends
+        # and retries it. It must never fail the save that changed the status.
         try:
             frappe.sendmail(
                 recipients=[self.raised_by],
@@ -183,17 +196,25 @@ class HDTicket(Document):
                 message=self._get_rendered_template(
                     feedback_email_content,
                     default_feedback_email_content,
-                    {"url": url},
+                    args,
                 ),
                 reference_doctype="HD Ticket",
                 reference_name=self.name,
-                now=True,
-                in_reply_to=last_communication.name if last_communication else None,
+                reply_to=self._reply_to_address(None),
+                in_reply_to=self._last_threadable_communication(),
+                expose_recipients="header",
                 email_headers={"X-Auto-Generated": "hd-email-feedback"},
             )
             frappe.msgprint(_("Feedback email has been sent to the customer"))
-        except Exception as e:
-            frappe.throw(_("Could not send feedback email,due to: {0}").format(e))
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            # the transaction is lost; let the caller retry the whole request
+            raise
+        except Exception:
+            frappe.log_error(
+                title=_("Feedback email could not be queued"),
+                reference_doctype="HD Ticket",
+                reference_name=self.name,
+            )
 
     def after_insert(self):
 
