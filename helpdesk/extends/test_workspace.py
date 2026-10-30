@@ -187,6 +187,38 @@ class TestWorkspaceOwnership(FrappeTestCase):
         as_user(AGENT, frappe_workspace.delete_page, json.dumps(page))
         self.assertFalse(frappe.db.exists("Workspace", renamed))
 
+    def test_update_page_is_refused_when_it_would_move_someone_elses_page(self):
+        # Frappe's update_page re-saves every private page whose parent_page is
+        # the edited page's title, whoever owns it. The guard refuses the whole
+        # call rather than let one agent re-parent another's page (AGENTS.md,
+        # Known behaviour); the other user's page is left as it was.
+        frappe.get_doc(private_page("Child", OTHER, parent_page="Own Page")).insert(
+            ignore_permissions=True
+        )
+        with self.assertRaises(frappe.PermissionError) as refused:
+            as_user(
+                AGENT,
+                frappe_workspace.update_page,
+                self.own.name,
+                "Own Page",
+                "",
+                "",
+                "",
+                0,
+            )
+        self.assertIn(f"Child-{OTHER}", str(refused.exception))
+        self.assertEqual(
+            frappe.db.get_value("Workspace", f"Child-{OTHER}", "parent_page"),
+            "Own Page",
+        )
+
+    def test_the_refusal_names_the_page_as_text(self) -> None:
+        # The message is shown as HTML; names can't hold "<" but can hold "&".
+        page = private_page("Q & A", OTHER)
+        with self.assertRaises(frappe.PermissionError) as refused:
+            insert_past_permissions_as(AGENT, page)
+        self.assertIn(f"Q &amp; A-{OTHER}", str(refused.exception))
+
     def test_a_workspace_manager_may_change_any_page(self) -> None:
         save_as(MANAGER, self.others.name, {"content": "[]"})
         save_as(MANAGER, self.public.name, {"is_hidden": 1})

@@ -1,12 +1,12 @@
 import frappe
 from frappe import _
 from frappe.desk.doctype.workspace.workspace import is_workspace_manager
-from frappe.utils import cint
+from frappe.utils import cint, escape_html
 
 
 def check_workspace_write(doc, method=None):
     """Let only Workspace Managers write a public Workspace or another user's
-    private one, on every path.
+    private one, whichever path inserts, saves, renames or deletes it.
 
     Frappe gives Desk User, so every System User, create, write and delete on
     every Workspace. Its own ownership checks are only in the sidebar's methods
@@ -16,7 +16,12 @@ def check_workspace_write(doc, method=None):
     public page private. Everyone else may now insert, save, rename or delete
     only a private Workspace whose for_user is themselves, before and after the
     change. The sidebar's methods already keep to that, and save with
-    ignore_permissions, which this check deliberately ignores.
+    ignore_permissions, which this check deliberately ignores. One edge they
+    don't: update_page also saves every private page whose parent has the
+    edited page's title, other users' included, and is then refused whole.
+    A child row deleted on its own (frappe.client.delete on a Workspace
+    Shortcut, say) checks only the parent's write permission and is not
+    covered here.
 
     Drop this once Frappe checks a private page's owner on every write path.
     """
@@ -27,16 +32,16 @@ def check_workspace_write(doc, method=None):
             "Workspace", doc.name, ["public", "for_user"], as_dict=True
         )
         if stored and not _own_private(stored.public, stored.for_user):
-            _refuse()
+            _refuse(doc.name)
     if not _own_private(doc.public, doc.for_user):
-        _refuse()
+        _refuse(doc.name)
 
 
 def check_workspace_change(doc, method=None, *args):
     """The same rule on rename (before_rename) and delete (on_trash), on the
     stored Workspace."""
     if _checked() and not _own_private(doc.public, doc.for_user):
-        _refuse()
+        _refuse(doc.name)
 
 
 def _checked():
@@ -55,10 +60,10 @@ def _own_private(public, for_user):
     return not cint(public) and bool(for_user) and for_user == frappe.session.user
 
 
-def _refuse():
+def _refuse(name):
     frappe.throw(
         _(
-            "Only a Workspace Manager can change a public workspace or another user's private workspace"
-        ),
+            "Only a Workspace Manager can change the workspace {0}: it is public, or another user's private workspace"
+        ).format(escape_html(name or "")),
         frappe.PermissionError,
     )
