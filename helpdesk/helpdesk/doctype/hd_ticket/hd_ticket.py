@@ -13,6 +13,7 @@ from frappe.desk.form.assign_to import get as get_assignees
 from frappe.email.email_body import EMBED_PATTERN, get_message_id
 from frappe.model.document import Document
 from frappe.permissions import (
+    AUTOMATIC_ROLES,
     add_permission,
     setup_custom_perms,
     update_permission_property,
@@ -55,6 +56,9 @@ from helpdesk.utils import (
 
 from ..hd_notification.utils import clear as clear_notifications
 from ..hd_service_level_agreement.utils import get_sla
+
+# The web form the feedback email links to.
+FEEDBACK_WEB_FORM = "email-feedback"
 
 
 class HDTicket(Document):
@@ -151,6 +155,10 @@ class HDTicket(Document):
             or self.feedback_rating
             or not self.has_value_changed("status")
             or not self.key
+            # a merged ticket's requester follows its merge target
+            or self.is_merged
+            or frappe.flags.in_import
+            or frappe.flags.in_patch
         ):
             return
 
@@ -169,13 +177,19 @@ class HDTicket(Document):
         if not send_feedback_email:
             return
 
-        last_communication = self.get_last_communication()
-
-        url = f"{frappe.utils.get_url()}/ticket-feedback/new?key={self.key}"
+        # The link opens the feedback web form with the ticket's key, so it is
+        # only offered while that form is published.
+        args = {}
+        if frappe.db.get_value("Web Form", FEEDBACK_WEB_FORM, "published"):
+            args["url"] = f"{frappe.utils.get_url()}/ticket-feedback/new?key={self.key}"
         feedback_email_content = frappe.db.get_single_value(
             "HD Settings", "feedback_email_content"
         )
         default_feedback_email_content = get_default_email_content("share_feedback")
+
+        # Like the acknowledgement, the feedback email is best-effort and
+        # queued: it commits with the status change, and the email queue sends
+        # and retries it. It must never fail the save that changed the status.
         try:
             frappe.sendmail(
                 recipients=[self.raised_by],
@@ -183,17 +197,25 @@ class HDTicket(Document):
                 message=self._get_rendered_template(
                     feedback_email_content,
                     default_feedback_email_content,
-                    {"url": url},
+                    args,
                 ),
                 reference_doctype="HD Ticket",
                 reference_name=self.name,
-                now=True,
-                in_reply_to=last_communication.name if last_communication else None,
+                reply_to=self._reply_to_address(None),
+                in_reply_to=self._last_threadable_communication(),
+                expose_recipients="header",
                 email_headers={"X-Auto-Generated": "hd-email-feedback"},
             )
             frappe.msgprint(_("Feedback email has been sent to the customer"))
-        except Exception as e:
-            frappe.throw(_("Could not send feedback email,due to: {0}").format(e))
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            # the transaction is lost; let the caller retry the whole request
+            raise
+        except Exception:
+            frappe.log_error(
+                title=_("Feedback email could not be queued"),
+                reference_doctype="HD Ticket",
+                reference_name=self.name,
+            )
 
     def after_insert(self):
 
@@ -550,6 +572,7 @@ class HDTicket(Document):
 
     @frappe.whitelist()
     def assign_agent(self, agent: str):
+        refuse_ticket_readers()
         assign({"assign_to": [agent], "doctype": "HD Ticket", "name": self.name})
 
         if frappe.session.user != agent:
@@ -828,7 +851,9 @@ class HDTicket(Document):
 
         reply_to_email = sender_email.email_id
         rendered_template: str | None = None
-        if self.via_customer_portal:
+        if self.via_customer_portal or frappe.db.get_single_value(
+            "HD Settings", "reply_via_agent_template_for_all_tickets"
+        ):
             email_content = frappe.db.get_single_value(
                 "HD Settings", "reply_via_agent_email_content"
             )
@@ -889,6 +914,7 @@ class HDTicket(Document):
         # and work on the stored ticket, never a client-built or unsaved one.
         if self.is_new():
             frappe.throw(_("Not permitted"), frappe.PermissionError)
+        refuse_ticket_readers()
         frappe.has_permission("HD Ticket", "read", self.name, throw=True)
         self.reload()
         self._create_communication_via_contact(message, attachments)
@@ -1063,6 +1089,7 @@ class HDTicket(Document):
 
     @frappe.whitelist()
     def mark_seen(self):
+        refuse_ticket_readers()
         self.add_viewed(
             unique_views=True, force=True
         )  # Document class method, no way to add unique_views via document settings, hence used force and unique_views=True
@@ -1224,8 +1251,11 @@ class HDTicket(Document):
         # Fetch description from communication if not set already. This might not be needed
         # anymore as a communication is created when a ticket is created.
         self.description = self.description or c.content
-        # Save the ticket, allowing for hooks to run.
-        self.save()
+        # Save the ticket, allowing for hooks to run. Whoever may add the
+        # communication may update its ticket this way: only these fields
+        # change, and a mail account or integration that adds replies needs no
+        # write permission on tickets.
+        self.save(ignore_permissions=True)
 
     def attach_file_with_doc(self, doctype, docname, file_url):
         if frappe.db.exists(
@@ -1460,6 +1490,9 @@ def has_permission(doc, user=None, ptype=None):
         return False
     if is_admin(user):
         return True
+    if is_ticket_reader(user):
+        # Read only, whatever else the user's roles or own tickets would allow.
+        return (ptype or "read") in READER_PTYPES and _agent_has_permission(doc, user)
     if user in (doc.contact, doc.raised_by, doc.owner):
         return True
     if _is_customer_manager(doc.customer, user):
@@ -1509,9 +1542,64 @@ def permission_query(user: str | None = None):
     user = user or frappe.session.user
     if is_admin(user):
         return
+    if is_ticket_reader(user):
+        return _agent_query(user)
     if not is_agent(user):
         return _customer_query(user)
     return _agent_query(user)
+
+
+# What a ticket reader may do with a ticket.
+READER_PTYPES = frozenset({"read", "select"})
+
+
+def get_ticket_reader_roles() -> set[str]:
+    """HD Settings' ticket reader roles, one per line. A role every user holds
+    (All, Guest, Desk User) is ignored: it would make everyone a reader."""
+    value = frappe.db.get_single_value("HD Settings", "ticket_reader_roles") or ""
+    roles = {line.strip() for line in value.splitlines()}
+    return roles - {""} - set(AUTOMATIC_ROLES)
+
+
+def is_ticket_reader(user: str | None = None) -> bool:
+    """Whether `user` is not an agent and holds one of the ticket reader roles.
+
+    A reader reads every ticket an agent would (with the DocPerms that let its
+    role read HD Ticket) and nothing else: no change, creation, deletion,
+    share, email, print or export of a ticket, and no reply, assignment or
+    comment on one. Of a ticket's files it reads only its emails'. Notes and
+    activity follow their own role permissions."""
+    user = user or frappe.session.user
+    roles = get_ticket_reader_roles()
+    if not roles or not roles.intersection(frappe.get_roles(user)):
+        return False
+    return not is_agent(user)
+
+
+def refuse_ticket_readers():
+    """Refuse a ticket reader a method that acts on a ticket it may only read:
+    Frappe runs a document's whitelisted methods for anyone who may read it."""
+    if is_ticket_reader():
+        frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+
+def refuse_ticket_reader_activity(doc, method=None):
+    """A ToDo (an assignment) or Comment on a ticket or one of its emails, by a
+    ticket reader. Frappe lets anyone who may read a document assign it,
+    unassign it and comment on it (frappe.desk.form.assign_to,
+    frappe.desk.form.utils.add_comment)."""
+    reference = doc.reference_type if doc.doctype == "ToDo" else doc.reference_doctype
+    if reference in ("HD Ticket", "Communication"):
+        refuse_ticket_readers()
+
+
+def ticket_reader_file_permission(doc, ptype=None, user=None, debug=False):
+    """A ticket reader reads only files attached to a Communication (a ticket's
+    emails): Frappe lets anyone who may read a document read its files, and a
+    ticket's own files include its notes' attachments. Undecided otherwise."""
+    if doc.attached_to_doctype != "Communication" and is_ticket_reader(user):
+        return False
+    return None
 
 
 def _customer_query(user: str) -> str:

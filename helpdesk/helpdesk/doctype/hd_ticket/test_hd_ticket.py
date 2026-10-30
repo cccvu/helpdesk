@@ -22,21 +22,27 @@ from helpdesk.helpdesk.doctype.hd_settings.helpers import (
     get_rendered_banner_msg,
 )
 from helpdesk.helpdesk.doctype.hd_ticket.api import (
+    get_ticket_activities,
     merge_ticket,
     new,
     show_outside_hours_banner,
     split_ticket,
 )
 from helpdesk.helpdesk.doctype.hd_ticket.hd_ticket import (
+    FEEDBACK_WEB_FORM,
     close_tickets_after_n_days,
     has_permission,
+    is_ticket_reader,
     permission_query,
+    ticket_reader_file_permission,
 )
 from helpdesk.test_utils import (
     SLA_PRIORITY_NAME,
     add_comment,
     add_contact_in_customer,
     add_holiday,
+    add_message,
+    add_received_message_as,
     create_contact,
     create_customer,
     create_user,
@@ -46,6 +52,7 @@ from helpdesk.test_utils import (
     get_current_week_monday,
     get_latest_ticket_communication,
     get_priority_response_resolution_time,
+    insert_as,
     make_agent,
     make_agent_manager,
     make_priority,
@@ -56,8 +63,11 @@ from helpdesk.test_utils import (
     make_ticket,
     remove_holidays,
     set_ticket_status_and_communication_date,
+    set_value_as,
+    ticket_reader_role,
     update_role_in_customer,
     upload_test_file,
+    web_form_published,
 )
 from helpdesk.utils import is_agent
 
@@ -199,6 +209,39 @@ def hd_settings(**values):
     finally:
         # rollback is per test class, so restore or later tests inherit this
         frappe.db.set_single_value("HD Settings", previous)
+
+
+FEEDBACK_HEADER = "hd-email-feedback"
+FEEDBACK_FAILED = "Feedback email could not be queued"
+
+
+def feedback_mails(sendmail) -> list[dict]:
+    """The kwargs of each feedback email a patched frappe.sendmail was called with."""
+    return [
+        c.kwargs
+        for c in sendmail.call_args_list
+        if (c.kwargs.get("email_headers") or {}).get("X-Auto-Generated")
+        == FEEDBACK_HEADER
+    ]
+
+
+@contextmanager
+def feedback_on(published: bool = True, **values):
+    """Send the feedback email when a ticket is closed, with HD Settings
+    `values` and the feedback web form `published` or not; restore both after."""
+    with (
+        hd_settings(
+            enable_email_ticket_feedback=1, send_email_feedback_on_status="", **values
+        ),
+        web_form_published(FEEDBACK_WEB_FORM, published),
+    ):
+        yield
+
+
+def close_ticket(ticket) -> None:
+    ticket.reload()
+    ticket.status = "Closed"
+    ticket.save()
 
 
 TEMPLATE_FAILED = "Email template could not be rendered"
@@ -903,6 +946,36 @@ class TestHDTicket(FrappeTestCase):
         ticket_a.reload()
         self.assertIsNotNone(ticket_a.last_customer_response)
 
+    def test_a_reply_updates_its_ticket_without_write_permission(self):
+        """Whoever may add a communication, such as an integration's user,
+        updates its ticket, though it may not write tickets."""
+        ticket = make_ticket(raised_by="reply_requester@example.com")
+        integration = create_user("reply_integration@example.com").name
+        self.assertFalse(
+            frappe.has_permission(
+                "HD Ticket", "write", doc=ticket.name, user=integration
+            )
+        )
+
+        add_received_message_as(integration, ticket.name)
+
+        ticket.reload()
+        self.assertIsNotNone(ticket.last_customer_response)
+
+    def test_a_reply_to_a_merged_ticket_updates_the_target_without_write(self):
+        source = make_ticket(raised_by="reply_requester@example.com")
+        target = make_ticket(raised_by="reply_requester@example.com")
+        merge_ticket(source=source.name, target=target.name)
+        integration = create_user("reply_integration@example.com").name
+
+        reply = add_received_message_as(integration, source.name)
+
+        self.assertEqual(
+            frappe.db.get_value("Communication", reply, "reference_name"), target.name
+        )
+        target.reload()
+        self.assertIsNotNone(target.last_customer_response)
+
     def test_ticket_split(self):
         ticket1 = make_ticket(description="Test Desc for split")
 
@@ -1508,6 +1581,29 @@ class TestHDTicket(FrappeTestCase):
         self.assertEqual(sent["reply_to"], f"support+{ticket.name}@example.com")
         self.assertEqual(sent["sender"], REPLY_ACCOUNT_EMAIL, "sender is unchanged")
 
+    def test_reply_uses_the_email_content_on_every_ticket_when_set(self):
+        ticket = make_ticket()
+        self.assertFalse(ticket.via_customer_portal)
+        with hd_settings(
+            reply_via_agent_email_content="<p>Ticket #{{ doc.name }}</p>{{ message }}",
+            reply_via_agent_template_for_all_tickets=1,
+        ):
+            sent = send_reply_with_template(ticket, None, message="Hello there")
+
+        self.assertIn(f"<p>Ticket #{ticket.name}</p>", sent["message"])
+        self.assertIn("Hello there", sent["message"])
+
+    def test_reply_is_sent_as_written_on_other_tickets_by_default(self):
+        ticket = make_ticket()
+        with hd_settings(
+            reply_via_agent_email_content="<p>Ticket #{{ doc.name }}</p>{{ message }}",
+            reply_via_agent_template_for_all_tickets=0,
+        ):
+            sent = send_reply_with_template(ticket, None, message="Hello there")
+
+        self.assertNotIn("Ticket #", sent["message"])
+        self.assertIn("Hello there", sent["message"])
+
     def test_reply_to_is_the_account_address_without_a_template(self):
         ticket = make_ticket()
         for template in (None, "", "  \n"):
@@ -1662,11 +1758,7 @@ class TestHDTicket(FrappeTestCase):
         ticket.reload()
         todos = frappe.db.count("ToDo")
         with (
-            hd_settings(
-                enable_email_ticket_feedback=1,
-                send_email_feedback_on_status="",
-                feedback_email_content=HOSTILE_CONTENT,
-            ),
+            feedback_on(feedback_email_content=HOSTILE_CONTENT),
             patch("frappe.sendmail") as sendmail,
         ):
             ticket.status = "Closed"
@@ -1677,6 +1769,129 @@ class TestHDTicket(FrappeTestCase):
         self.assertIn("We’d love your feedback", message)
         self.assertIn(f"/ticket-feedback/new?key={ticket.key}", message)
         self.assertEqual(frappe.db.count("ToDo"), todos)
+
+    def test_feedback_email_is_threaded_with_the_reply_to_template(self):
+        """Like the acknowledgement: the Reply-To template applies, and the mail
+        replies to the newest communication that has a Message-ID."""
+        ticket = make_ticket()
+        add_message(ticket.name, "Sent", agent, subject="Agent reply")
+        threadable = frappe.db.get_value(
+            "Communication",
+            {"reference_name": ticket.name, "subject": "Agent reply"},
+            "name",
+        )
+        frappe.db.set_value(
+            "Communication", threadable, "message_id", "reply-1@example.com"
+        )
+        add_message(ticket.name, "Received", ticket.raised_by, subject="No id")
+        with (
+            feedback_on(reply_to_template="support+{{ doc.name }}@example.com"),
+            patch("frappe.sendmail") as sendmail,
+        ):
+            close_ticket(ticket)
+
+        [sent] = feedback_mails(sendmail)
+        self.assertEqual(sent["recipients"], [ticket.raised_by])
+        self.assertEqual(sent["reply_to"], f"support+{ticket.name}@example.com")
+        self.assertEqual(sent["in_reply_to"], threadable)
+        self.assertFalse(sent.get("now"), "the feedback email is queued")
+
+    def test_feedback_email_is_queued_with_the_status_change(self):
+        ticket = make_ticket()
+        with (
+            feedback_on(reply_to_template="support+{{ doc.name }}@example.com"),
+            patch("frappe.are_emails_muted", return_value=False),
+            patch.object(frappe.db, "commit") as commit,
+        ):
+            close_ticket(ticket)
+
+        commit.assert_not_called()
+        queued = [
+            row
+            for row in frappe.get_all(
+                "Email Queue",
+                filters={
+                    "reference_doctype": "HD Ticket",
+                    "reference_name": ticket.name,
+                },
+                fields=["status", "message"],
+            )
+            if FEEDBACK_HEADER in (row.message or "")
+        ]
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].status, "Not Sent")
+        self.assertEqual(
+            message_from_string(queued[0].message)["Reply-To"],
+            f"support+{ticket.name}@example.com",
+        )
+
+    def test_feedback_email_has_no_link_while_its_form_is_unpublished(self):
+        """The link carries the ticket's key, and leads nowhere without the form."""
+        ticket = make_ticket()
+        with (
+            feedback_on(
+                published=False, feedback_email_content="<p>Rate us: {{ url }}</p>"
+            ),
+            patch("frappe.sendmail") as sendmail,
+        ):
+            close_ticket(ticket)
+
+        [sent] = feedback_mails(sendmail)
+        self.assertNotIn(ticket.key, sent["message"])
+        self.assertNotIn("/ticket-feedback/", sent["message"])
+
+    def test_feedback_failure_is_logged_and_does_not_block_the_save(self):
+        def sendmail(**kwargs):
+            if (kwargs.get("email_headers") or {}).get(
+                "X-Auto-Generated"
+            ) == FEEDBACK_HEADER:
+                raise Exception("mail server refused the message")
+
+        ticket = make_ticket()
+        before = set(frappe.get_all("Error Log", pluck="name"))
+        with feedback_on(), patch("frappe.sendmail", side_effect=sendmail):
+            close_ticket(ticket)
+
+        self.assertEqual(
+            frappe.db.get_value("HD Ticket", ticket.name, "status"), "Closed"
+        )
+        self.assertEqual(
+            [
+                (log.method, log.reference_doctype, log.reference_name)
+                for log in new_error_logs(before)
+            ],
+            [(FEEDBACK_FAILED, "HD Ticket", ticket.name)],
+        )
+
+    def test_feedback_deadlock_fails_the_save(self):
+        """A deadlock loses the transaction, so the caller must retry it."""
+        ticket = make_ticket()
+        with (
+            feedback_on(),
+            patch("frappe.sendmail", side_effect=frappe.QueryDeadlockError),
+            self.assertRaises(frappe.QueryDeadlockError),
+        ):
+            close_ticket(ticket)
+
+    def test_no_feedback_email_for_a_merged_ticket(self):
+        source = make_ticket(subject="Source")
+        target = make_ticket(subject="Target")
+        with feedback_on(), patch("frappe.sendmail") as sendmail:
+            merge_ticket(source=source.name, target=target.name)
+
+        self.assertTrue(frappe.db.get_value("HD Ticket", source.name, "is_merged"))
+        self.assertEqual(feedback_mails(sendmail), [])
+
+    def test_no_feedback_email_during_an_import_or_patch(self):
+        for flag in ("in_import", "in_patch"):
+            ticket = make_ticket()
+            with feedback_on(), patch("frappe.sendmail") as sendmail:
+                setattr(frappe.flags, flag, True)
+                try:
+                    close_ticket(ticket)
+                finally:
+                    setattr(frappe.flags, flag, False)
+            self.assertEqual(feedback_mails(sendmail), [], flag)
 
     def test_reply_to_template_renders_with_data_only(self):
         ticket = make_ticket()
@@ -3237,3 +3452,328 @@ class TestTicketDeleteRights(FrappeTestCase):
             with self.subTest(ptype=ptype):
                 self.assertTrue(has_permission(ticket, user=self.agent, ptype=ptype))
         self.assertTrue(has_permission(ticket, user=self.manager, ptype="delete"))
+
+
+READER_ROLE = "Test Ticket Reader"
+WRITE_RIGHTS = ("write", "create", "delete", "share", "email", "print", "export")
+
+
+class TestTicketReaders(FrappeTestCase):
+    """A role HD Settings lists as a ticket reader role reads every ticket an
+    agent would, and does nothing else with one."""
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        self.reader = "ticket_reader@example.com"
+        self.requester = create_user("ticket_reader_requester@example.com").name
+        self.agent = make_agent("ticket_reader_agent@example.com")
+        self.ticket = make_ticket(raised_by=self.requester)
+        add_comment(self.ticket.name, "Internal note")
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def readers(self, **kwargs):
+        return ticket_reader_role(READER_ROLE, users=[self.reader], **kwargs)
+
+    def test_reader_reads_any_ticket(self):
+        with self.readers():
+            self.assertTrue(is_ticket_reader(self.reader))
+            for ptype in ("read", "select"):
+                self.assertTrue(
+                    frappe.has_permission(
+                        "HD Ticket", ptype, doc=self.ticket.name, user=self.reader
+                    ),
+                    ptype,
+                )
+            self.assertIsNone(permission_query(self.reader), "agents' visibility")
+            frappe.set_user(self.reader)
+            self.assertIn(self.ticket.name, frappe.get_list("HD Ticket", pluck="name"))
+
+    def test_role_reads_nothing_unless_listed(self):
+        with self.readers(listed=False):
+            self.assertFalse(is_ticket_reader(self.reader))
+            self.assertFalse(
+                frappe.has_permission(
+                    "HD Ticket", "read", doc=self.ticket.name, user=self.reader
+                )
+            )
+            frappe.set_user(self.reader)
+            self.assertNotIn(
+                self.ticket.name, frappe.get_list("HD Ticket", pluck="name")
+            )
+
+    def test_reader_does_nothing_else_whatever_its_docperms(self):
+        with self.readers(rights=("read", "select", "report", *WRITE_RIGHTS)):
+            for ptype in WRITE_RIGHTS:
+                self.assertFalse(
+                    frappe.has_permission(
+                        "HD Ticket", ptype, doc=self.ticket.name, user=self.reader
+                    ),
+                    ptype,
+                )
+            with self.assertRaises(frappe.PermissionError):
+                set_value_as(
+                    self.reader, "HD Ticket", self.ticket.name, {"subject": "Changed"}
+                )
+            with self.assertRaises(frappe.PermissionError):
+                insert_as(
+                    self.reader,
+                    {"doctype": "HD Ticket", "subject": "New", "description": "x"},
+                )
+            with self.assertRaises(frappe.PermissionError):
+                delete_doc_as(self.reader, "HD Ticket", self.ticket.name)
+
+        self.assertEqual(
+            frappe.db.get_value("HD Ticket", self.ticket.name, "subject"),
+            self.ticket.subject,
+        )
+
+    def test_reader_cannot_write_its_own_ticket(self):
+        mine = make_ticket(raised_by=create_user(self.reader).name)
+        with self.readers(rights=("read", "write")):
+            self.assertFalse(
+                frappe.has_permission(
+                    "HD Ticket", "write", doc=mine.name, user=self.reader
+                )
+            )
+
+    def test_reader_reads_no_notes_or_activity(self):
+        with self.readers():
+            self.assertFalse(
+                frappe.has_permission("HD Ticket Comment", "read", user=self.reader)
+            )
+            self.assertFalse(
+                frappe.has_permission("HD Ticket Activity", "read", user=self.reader)
+            )
+            frappe.set_user(self.reader)
+            activities = get_ticket_activities(self.ticket.name)
+        self.assertEqual(activities["comments"], [])
+        self.assertEqual(activities["history"], [])
+
+    def test_reader_cannot_reply_assign_or_mark_seen(self):
+        communications = frappe.db.count(
+            "Communication", {"reference_name": self.ticket.name}
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            ticket = frappe.get_doc("HD Ticket", self.ticket.name)
+            for call in (
+                lambda: ticket.create_communication_via_contact(message="Reply"),
+                lambda: ticket.assign_agent(self.agent),
+                ticket.mark_seen,
+            ):
+                with self.assertRaises(frappe.PermissionError):
+                    call()
+            frappe.set_user("Administrator")
+
+        self.assertEqual(
+            frappe.db.count("Communication", {"reference_name": self.ticket.name}),
+            communications,
+        )
+        self.assertFalse(
+            frappe.get_doc("HD Ticket", self.ticket.name).get_assigned_agents()
+        )
+
+    def test_reader_cannot_assign_unassign_or_comment_through_frappe(self):
+        # (assign_to.close is the assignee's alone, in Frappe itself.)
+        from frappe.desk.form import assign_to
+        from frappe.desk.form.utils import add_comment as add_desk_comment
+
+        assign_to.add(
+            {
+                "assign_to": [self.agent],
+                "doctype": "HD Ticket",
+                "name": self.ticket.name,
+            }
+        )
+        comments = frappe.db.count(
+            "Comment",
+            {"reference_doctype": "HD Ticket", "reference_name": self.ticket.name},
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            for call in (
+                lambda: assign_to.add(
+                    {
+                        "assign_to": [
+                            create_user("ticket_reader_other@example.com").name
+                        ],
+                        "doctype": "HD Ticket",
+                        "name": self.ticket.name,
+                    }
+                ),
+                lambda: assign_to.remove("HD Ticket", self.ticket.name, self.agent),
+                lambda: add_desk_comment(
+                    "HD Ticket", self.ticket.name, "Hello", self.reader, "Reader"
+                ),
+            ):
+                with self.assertRaises(frappe.PermissionError):
+                    call()
+            frappe.set_user("Administrator")
+
+        self.assertEqual(
+            frappe.db.get_all(
+                "ToDo",
+                {
+                    "reference_type": "HD Ticket",
+                    "reference_name": self.ticket.name,
+                    "status": "Open",
+                },
+                pluck="allocated_to",
+            ),
+            [self.agent],
+        )
+        self.assertEqual(
+            frappe.db.count(
+                "Comment",
+                {"reference_doctype": "HD Ticket", "reference_name": self.ticket.name},
+            ),
+            comments,
+        )
+
+    def test_reader_reads_only_the_files_of_a_tickets_emails(self):
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+        )
+        on_email = make_private_file(
+            "Administrator", attached_to_doctype="Communication", attached_to_name="x"
+        )
+        self.assertTrue(
+            frappe.has_permission("File", "read", doc=on_ticket, user=self.agent)
+        )
+        with self.readers():
+            self.assertFalse(
+                frappe.has_permission("File", "read", doc=on_ticket, user=self.reader)
+            )
+            self.assertIsNone(
+                ticket_reader_file_permission(on_email, "read", self.reader)
+            )
+        self.assertIsNone(ticket_reader_file_permission(on_ticket, "read", self.agent))
+
+    def test_reader_cannot_download_a_tickets_own_file(self):
+        """The path that serves /private/files checks File.is_downloadable."""
+        from frappe.core.doctype.file.utils import find_file_by_url
+
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            self.assertIsNone(find_file_by_url(on_ticket.file_url))
+            frappe.set_user(self.agent)
+            self.assertEqual(find_file_by_url(on_ticket.file_url).name, on_ticket.name)
+
+    def test_reader_zips_only_the_files_of_a_tickets_emails(self):
+        """Through Frappe's dispatch, under each name a client may call it by."""
+        import io
+        import zipfile
+
+        from frappe.handler import execute_cmd
+
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+            file_name="ticket-own.txt",
+        )
+
+        def zipped_as(user, cmd):
+            frappe.set_user(user)
+            frappe.local.response = frappe._dict()
+            frappe.local.form_dict = frappe._dict(
+                files=frappe.as_json([on_ticket.name])
+            )
+            frappe.local.request = frappe._dict(method="POST")
+            try:
+                execute_cmd(cmd)
+            finally:
+                del frappe.local.request
+            content = frappe.local.response.filecontent
+            return zipfile.ZipFile(io.BytesIO(content)).namelist()
+
+        for cmd in (
+            "frappe.core.api.file.zip_files",
+            "frappe.core.doctype.file.file.zip_files",
+        ):
+            with self.subTest(cmd=cmd), self.readers():
+                self.assertEqual(
+                    frappe.override_whitelisted_method(cmd),
+                    "helpdesk.overrides.file.zip_files",
+                )
+                self.assertEqual(zipped_as(self.reader, cmd), [])
+                self.assertEqual(zipped_as(self.agent, cmd), ["ticket-own.txt"])
+            frappe.set_user("Administrator")
+
+    def test_reader_adds_no_file(self):
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+        )
+        with self.readers():
+            with self.assertRaises(frappe.PermissionError):
+                make_private_file(self.reader, content=b"new")
+            frappe.set_user(self.reader)
+            with self.assertRaises(frappe.PermissionError):
+                frappe.get_doc(
+                    {
+                        "doctype": "File",
+                        "file_url": on_ticket.file_url,
+                        "is_private": 1,
+                        "attached_to_doctype": "Communication",
+                        "attached_to_name": "x",
+                    }
+                ).insert(ignore_permissions=True)
+            frappe.set_user("Administrator")
+
+    def test_reader_cannot_assign_or_comment_on_a_tickets_email(self):
+        """assign_to.add and add_comment insert these documents (ignore_permissions)."""
+        add_message(self.ticket.name, "Sent", self.agent, subject="Email to assign")
+        email = frappe.db.get_value(
+            "Communication",
+            {"reference_name": self.ticket.name, "subject": "Email to assign"},
+            "name",
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            todo = frappe.get_doc(
+                {
+                    "doctype": "ToDo",
+                    "allocated_to": self.agent,
+                    "reference_type": "Communication",
+                    "reference_name": email,
+                    "description": "x",
+                }
+            )
+            comment = frappe.get_doc(
+                {
+                    "doctype": "Comment",
+                    "comment_type": "Comment",
+                    "reference_doctype": "Communication",
+                    "reference_name": email,
+                    "content": "x",
+                }
+            )
+            for doc in (todo, comment):
+                with self.assertRaises(frappe.PermissionError):
+                    doc.insert(ignore_permissions=True)
+            frappe.set_user("Administrator")
+
+    def test_agents_are_never_readers(self):
+        with ticket_reader_role(READER_ROLE, users=[self.agent]):
+            self.assertFalse(is_ticket_reader(self.agent))
+            self.assertTrue(
+                frappe.has_permission(
+                    "HD Ticket", "write", doc=self.ticket.name, user=self.agent
+                )
+            )
+
+    def test_roles_every_user_holds_are_ignored(self):
+        with hd_settings(ticket_reader_roles="All\nGuest\nDesk User\n"):
+            self.assertFalse(is_ticket_reader(self.requester))
+            self.assertFalse(is_ticket_reader("Guest"))
