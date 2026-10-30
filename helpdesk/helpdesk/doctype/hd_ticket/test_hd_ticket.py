@@ -3653,6 +3653,54 @@ class TestTicketReaders(FrappeTestCase):
             )
         self.assertIsNone(ticket_reader_file_permission(on_ticket, "read", self.agent))
 
+    def test_reader_cannot_download_a_tickets_own_file(self):
+        """The path that serves /private/files checks File.is_downloadable."""
+        from frappe.core.doctype.file.utils import find_file_by_url
+
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            self.assertIsNone(find_file_by_url(on_ticket.file_url))
+            frappe.set_user(self.agent)
+            self.assertEqual(find_file_by_url(on_ticket.file_url).name, on_ticket.name)
+
+    def test_reader_cannot_assign_or_comment_on_a_tickets_email(self):
+        """assign_to.add and add_comment insert these documents (ignore_permissions)."""
+        add_message(self.ticket.name, "Sent", self.agent, subject="Email to assign")
+        email = frappe.db.get_value(
+            "Communication",
+            {"reference_name": self.ticket.name, "subject": "Email to assign"},
+            "name",
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            todo = frappe.get_doc(
+                {
+                    "doctype": "ToDo",
+                    "allocated_to": self.agent,
+                    "reference_type": "Communication",
+                    "reference_name": email,
+                    "description": "x",
+                }
+            )
+            comment = frappe.get_doc(
+                {
+                    "doctype": "Comment",
+                    "comment_type": "Comment",
+                    "reference_doctype": "Communication",
+                    "reference_name": email,
+                    "content": "x",
+                }
+            )
+            for doc in (todo, comment):
+                with self.assertRaises(frappe.PermissionError):
+                    doc.insert(ignore_permissions=True)
+            frappe.set_user("Administrator")
+
     def test_agents_are_never_readers(self):
         with ticket_reader_role(READER_ROLE, users=[self.agent]):
             self.assertFalse(is_ticket_reader(self.agent))

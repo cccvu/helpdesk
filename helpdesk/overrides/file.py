@@ -21,6 +21,19 @@ class HelpdeskFile(File):
     Frappe version Helpdesk runs on.
     """
 
+    def is_downloadable(self):
+        """Also apply the ticket reader rule (hd_ticket's ticket_reader_file_permission,
+        a File has_permission hook) when a private file is served: Frappe v15's
+        is_downloadable checks only File's own rule, never an app's hooks.
+        Redundant once is_downloadable consults the has_permission hooks."""
+        from helpdesk.helpdesk.doctype.hd_ticket.hd_ticket import (
+            ticket_reader_file_permission,
+        )
+
+        if ticket_reader_file_permission(self, "read") is False:
+            return False
+        return super().is_downloadable()
+
     def before_insert(self):
         self.validate_canonical_file_url()
         self.validate_has_source()

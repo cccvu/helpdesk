@@ -1584,11 +1584,12 @@ def refuse_ticket_readers():
 
 
 def refuse_ticket_reader_activity(doc, method=None):
-    """A ToDo (an assignment) or Comment on a ticket, by a ticket reader. Frappe
-    lets anyone who may read a document assign it, unassign it and comment on
-    it (frappe.desk.form.assign_to, frappe.desk.form.utils.add_comment)."""
+    """A ToDo (an assignment) or Comment on a ticket or one of its emails, by a
+    ticket reader. Frappe lets anyone who may read a document assign it,
+    unassign it and comment on it (frappe.desk.form.assign_to,
+    frappe.desk.form.utils.add_comment)."""
     reference = doc.reference_type if doc.doctype == "ToDo" else doc.reference_doctype
-    if reference == "HD Ticket":
+    if reference in ("HD Ticket", "Communication"):
         refuse_ticket_readers()
 
 
