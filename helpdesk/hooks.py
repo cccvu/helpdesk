@@ -167,6 +167,7 @@ ignore_links_on_delete = [
 before_request = ["helpdesk.overrides.document.ignore_client_validate_rename"]
 override_whitelisted_methods = {
     "frappe.rename_doc": "helpdesk.overrides.document.rename_doc",
+    "frappe.core.api.file.zip_files": "helpdesk.overrides.file.zip_files",
 }
 
 # Ticket template options

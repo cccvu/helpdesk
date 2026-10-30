@@ -3668,6 +3668,58 @@ class TestTicketReaders(FrappeTestCase):
             frappe.set_user(self.agent)
             self.assertEqual(find_file_by_url(on_ticket.file_url).name, on_ticket.name)
 
+    def test_reader_zips_only_the_files_of_a_tickets_emails(self):
+        import io
+        import zipfile
+
+        from helpdesk.overrides.file import zip_files
+
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+            file_name="ticket-own.txt",
+        )
+
+        def zipped_as(user):
+            frappe.set_user(user)
+            frappe.local.response = frappe._dict()
+            zip_files(frappe.as_json([on_ticket.name]))
+            content = frappe.local.response.filecontent
+            return zipfile.ZipFile(io.BytesIO(content)).namelist()
+
+        with self.readers():
+            self.assertEqual(zipped_as(self.reader), [])
+            self.assertEqual(zipped_as(self.agent), ["ticket-own.txt"])
+        self.assertEqual(
+            frappe.get_hooks("override_whitelisted_methods")[
+                "frappe.core.api.file.zip_files"
+            ],
+            ["helpdesk.overrides.file.zip_files"],
+        )
+
+    def test_reader_adds_no_file(self):
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+        )
+        with self.readers():
+            with self.assertRaises(frappe.PermissionError):
+                make_private_file(self.reader, content=b"new")
+            frappe.set_user(self.reader)
+            with self.assertRaises(frappe.PermissionError):
+                frappe.get_doc(
+                    {
+                        "doctype": "File",
+                        "file_url": on_ticket.file_url,
+                        "is_private": 1,
+                        "attached_to_doctype": "Communication",
+                        "attached_to_name": "x",
+                    }
+                ).insert(ignore_permissions=True)
+            frappe.set_user("Administrator")
+
     def test_reader_cannot_assign_or_comment_on_a_tickets_email(self):
         """assign_to.add and add_comment insert these documents (ignore_permissions)."""
         add_message(self.ticket.name, "Sent", self.agent, subject="Email to assign")
