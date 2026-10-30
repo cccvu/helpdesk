@@ -1566,13 +1566,14 @@ def is_ticket_reader(user: str | None = None) -> bool:
 
     A reader reads every ticket an agent would (with the DocPerms that let its
     role read HD Ticket) and nothing else: no change, creation, deletion,
-    share, email, print or export of a ticket, and no reply or assignment on
-    one. Notes and activity follow their own role permissions."""
+    share, email, print or export of a ticket, and no reply, assignment or
+    comment on one. Of a ticket's files it reads only its emails'. Notes and
+    activity follow their own role permissions."""
     user = user or frappe.session.user
     roles = get_ticket_reader_roles()
-    if not roles or is_agent(user):
+    if not roles or not roles.intersection(frappe.get_roles(user)):
         return False
-    return bool(roles.intersection(frappe.get_roles(user)))
+    return not is_agent(user)
 
 
 def refuse_ticket_readers():
@@ -1580,6 +1581,24 @@ def refuse_ticket_readers():
     Frappe runs a document's whitelisted methods for anyone who may read it."""
     if is_ticket_reader():
         frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+
+def refuse_ticket_reader_activity(doc, method=None):
+    """A ToDo (an assignment) or Comment on a ticket, by a ticket reader. Frappe
+    lets anyone who may read a document assign it, unassign it and comment on
+    it (frappe.desk.form.assign_to, frappe.desk.form.utils.add_comment)."""
+    reference = doc.reference_type if doc.doctype == "ToDo" else doc.reference_doctype
+    if reference == "HD Ticket":
+        refuse_ticket_readers()
+
+
+def ticket_reader_file_permission(doc, ptype=None, user=None, debug=False):
+    """A ticket reader reads only files attached to a Communication (a ticket's
+    emails): Frappe lets anyone who may read a document read its files, and a
+    ticket's own files include its notes' attachments. Undecided otherwise."""
+    if doc.attached_to_doctype != "Communication" and is_ticket_reader(user):
+        return False
+    return None
 
 
 def _customer_query(user: str) -> str:

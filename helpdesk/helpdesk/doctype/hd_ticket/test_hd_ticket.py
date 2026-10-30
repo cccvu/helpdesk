@@ -34,6 +34,7 @@ from helpdesk.helpdesk.doctype.hd_ticket.hd_ticket import (
     has_permission,
     is_ticket_reader,
     permission_query,
+    ticket_reader_file_permission,
 )
 from helpdesk.test_utils import (
     SLA_PRIORITY_NAME,
@@ -3573,6 +3574,84 @@ class TestTicketReaders(FrappeTestCase):
         self.assertFalse(
             frappe.get_doc("HD Ticket", self.ticket.name).get_assigned_agents()
         )
+
+    def test_reader_cannot_assign_unassign_or_comment_through_frappe(self):
+        # (assign_to.close is the assignee's alone, in Frappe itself.)
+        from frappe.desk.form import assign_to
+        from frappe.desk.form.utils import add_comment as add_desk_comment
+
+        assign_to.add(
+            {
+                "assign_to": [self.agent],
+                "doctype": "HD Ticket",
+                "name": self.ticket.name,
+            }
+        )
+        comments = frappe.db.count(
+            "Comment",
+            {"reference_doctype": "HD Ticket", "reference_name": self.ticket.name},
+        )
+        with self.readers():
+            frappe.set_user(self.reader)
+            for call in (
+                lambda: assign_to.add(
+                    {
+                        "assign_to": [
+                            create_user("ticket_reader_other@example.com").name
+                        ],
+                        "doctype": "HD Ticket",
+                        "name": self.ticket.name,
+                    }
+                ),
+                lambda: assign_to.remove("HD Ticket", self.ticket.name, self.agent),
+                lambda: add_desk_comment(
+                    "HD Ticket", self.ticket.name, "Hello", self.reader, "Reader"
+                ),
+            ):
+                with self.assertRaises(frappe.PermissionError):
+                    call()
+            frappe.set_user("Administrator")
+
+        self.assertEqual(
+            frappe.db.get_all(
+                "ToDo",
+                {
+                    "reference_type": "HD Ticket",
+                    "reference_name": self.ticket.name,
+                    "status": "Open",
+                },
+                pluck="allocated_to",
+            ),
+            [self.agent],
+        )
+        self.assertEqual(
+            frappe.db.count(
+                "Comment",
+                {"reference_doctype": "HD Ticket", "reference_name": self.ticket.name},
+            ),
+            comments,
+        )
+
+    def test_reader_reads_only_the_files_of_a_tickets_emails(self):
+        on_ticket = make_private_file(
+            "Administrator",
+            attached_to_doctype="HD Ticket",
+            attached_to_name=self.ticket.name,
+        )
+        on_email = make_private_file(
+            "Administrator", attached_to_doctype="Communication", attached_to_name="x"
+        )
+        self.assertTrue(
+            frappe.has_permission("File", "read", doc=on_ticket, user=self.agent)
+        )
+        with self.readers():
+            self.assertFalse(
+                frappe.has_permission("File", "read", doc=on_ticket, user=self.reader)
+            )
+            self.assertIsNone(
+                ticket_reader_file_permission(on_email, "read", self.reader)
+            )
+        self.assertIsNone(ticket_reader_file_permission(on_ticket, "read", self.agent))
 
     def test_agents_are_never_readers(self):
         with ticket_reader_role(READER_ROLE, users=[self.agent]):

@@ -130,7 +130,7 @@
    "label": "Do not restrict tickets without a Team"
   },
   {
-   "description": "Roles, one per line, whose users can read tickets as an agent would, but nothing else: they can't change, create, delete, share, email, print or export a ticket, reply to it or assign it. Agents are never readers, and the role still needs read permission on HD Ticket. Notes and activity keep their own permissions.",
+   "description": "Roles, one per line, whose users can read tickets as an agent would, but nothing else: they can't change, create, delete, share, email, print or export a ticket, reply to it, assign it or comment on it, and of its files they read only its emails'. Agents are never readers, and the role still needs read permission on HD Ticket. Notes and activity keep their own permissions.",
    "fieldname": "ticket_reader_roles",
    "fieldtype": "Small Text",
    "label": "Ticket reader roles"

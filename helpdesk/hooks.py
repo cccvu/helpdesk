@@ -109,6 +109,14 @@ doc_events = {
     "Notification Log": {
         "before_insert": "helpdesk.extends.notification_log.before_insert",
     },
+    "ToDo": {
+        "validate": "helpdesk.helpdesk.doctype.hd_ticket.hd_ticket.refuse_ticket_reader_activity",
+        "on_trash": "helpdesk.helpdesk.doctype.hd_ticket.hd_ticket.refuse_ticket_reader_activity",
+    },
+    "Comment": {
+        "validate": "helpdesk.helpdesk.doctype.hd_ticket.hd_ticket.refuse_ticket_reader_activity",
+        "on_trash": "helpdesk.helpdesk.doctype.hd_ticket.hd_ticket.refuse_ticket_reader_activity",
+    },
     "User": {
         "on_update": "helpdesk.extends.user.sync_agent_name",
     },
@@ -132,6 +140,7 @@ has_permission = {
     "HD Ticket": "helpdesk.helpdesk.doctype.hd_ticket.hd_ticket.has_permission",
     "HD Saved Reply": "helpdesk.helpdesk.doctype.hd_saved_reply.hd_saved_reply.has_permission",
     "HD Customer": "helpdesk.helpdesk.doctype.hd_customer.hd_customer.has_permission",
+    "File": "helpdesk.helpdesk.doctype.hd_ticket.hd_ticket.ticket_reader_file_permission",
 }
 
 
