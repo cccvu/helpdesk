@@ -849,7 +849,9 @@ class HDTicket(Document):
 
         reply_to_email = sender_email.email_id
         rendered_template: str | None = None
-        if self.via_customer_portal:
+        if self.via_customer_portal or frappe.db.get_single_value(
+            "HD Settings", "reply_via_agent_template_for_all_tickets"
+        ):
             email_content = frappe.db.get_single_value(
                 "HD Settings", "reply_via_agent_email_content"
             )

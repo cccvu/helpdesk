@@ -1544,6 +1544,29 @@ class TestHDTicket(FrappeTestCase):
         self.assertEqual(sent["reply_to"], f"support+{ticket.name}@example.com")
         self.assertEqual(sent["sender"], REPLY_ACCOUNT_EMAIL, "sender is unchanged")
 
+    def test_reply_uses_the_email_content_on_every_ticket_when_set(self):
+        ticket = make_ticket()
+        self.assertFalse(ticket.via_customer_portal)
+        with hd_settings(
+            reply_via_agent_email_content="<p>Ticket #{{ doc.name }}</p>{{ message }}",
+            reply_via_agent_template_for_all_tickets=1,
+        ):
+            sent = send_reply_with_template(ticket, None, message="Hello there")
+
+        self.assertIn(f"<p>Ticket #{ticket.name}</p>", sent["message"])
+        self.assertIn("Hello there", sent["message"])
+
+    def test_reply_is_sent_as_written_on_other_tickets_by_default(self):
+        ticket = make_ticket()
+        with hd_settings(
+            reply_via_agent_email_content="<p>Ticket #{{ doc.name }}</p>{{ message }}",
+            reply_via_agent_template_for_all_tickets=0,
+        ):
+            sent = send_reply_with_template(ticket, None, message="Hello there")
+
+        self.assertNotIn("Ticket #", sent["message"])
+        self.assertIn("Hello there", sent["message"])
+
     def test_reply_to_is_the_account_address_without_a_template(self):
         ticket = make_ticket()
         for template in (None, "", "  \n"):

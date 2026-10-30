@@ -83,6 +83,7 @@
   "reply_from_agent_section",
   "enable_reply_email_via_agent",
   "reply_via_agent_email_content",
+  "reply_via_agent_template_for_all_tickets",
   "reply_to_template"
  ],
  "fields": [
@@ -428,6 +429,13 @@
    "label": "Email Content"
   },
   {
+   "default": "0",
+   "description": "If enabled, every emailed agent reply is sent in the email content above. Otherwise only replies on tickets raised from the customer portal are, and other replies are sent as written.",
+   "fieldname": "reply_via_agent_template_for_all_tickets",
+   "fieldtype": "Check",
+   "label": "Use the email content for every ticket"
+  },
+  {
    "description": "Optional. A Jinja template for the Reply-To address of agent replies and of the acknowledgement email, rendered with <code>doc</code> as the HD Ticket. It must produce one email address, for example <code>support+{{ doc.name }}@example.com</code>. When it is empty, fails to render or does not produce a valid address, an agent reply uses the email account's address and the acknowledgement email uses its sender's.",
    "fieldname": "reply_to_template",
    "fieldtype": "Code",
@@ -549,7 +557,7 @@
  "grid_page_length": 50,
  "issingle": 1,
  "links": [],
- "modified": "2026-09-30 12:00:00.000000",
+ "modified": "2026-10-30 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Helpdesk",
  "name": "HD Settings",
