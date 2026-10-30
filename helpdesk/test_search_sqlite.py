@@ -153,6 +153,16 @@ class TestSearchHidesNotesFromNonAgents(FrappeTestCase):
         )
         self.assertNotIn("HD Ticket Comment", doctypes)
 
+    def test_only_index_columns_filter(self):
+        expected, _ = self.found_as(RESTRICTED_USER)
+        for filters in ('{"not a column": "x"}', '{"subject": "x", "status": []}'):
+            with self.subTest(filters=filters):
+                doctypes, summary = self.found_as(RESTRICTED_USER, filters=filters)
+                expected_here = [] if "status" in filters else expected
+                self.assertEqual(sorted(doctypes), sorted(expected_here))
+                self.assertNotIn("not a column", summary["applied_filters"])
+                self.assertNotIn("subject", summary["applied_filters"])
+
     def test_filter_options_count_no_notes_for_others(self):
         frappe.set_user(RESTRICTED_USER)
         self.assertNotIn("HD Ticket Comment", get_filter_options()["doctypes"])

@@ -80,6 +80,13 @@ class HelpdeskSearch(SQLiteSearch):
     }
 
     def search(self, query, title_only: bool = False, filters: dict | None = None):
+        # The core search puts each filter's key into its query as a column
+        # name, so only the index's own filter columns are kept.
+        filters = {
+            field: value
+            for field, value in (filters or {}).items()
+            if field in self.filter_fields()
+        }
         result = super().search(query, title_only=title_only, filters=filters)
         if not is_agent():
             result["results"] = [
@@ -102,6 +109,10 @@ class HelpdeskSearch(SQLiteSearch):
         if self.is_post_filter_required:
             return doctypes
         return {"reference_ticket": accessible_tickets, **doctypes}
+
+    def filter_fields(self) -> set[str]:
+        """The columns a search may filter on: the doctype and the metadata fields."""
+        return {"doctype", *self.INDEX_SCHEMA["metadata_fields"]}
 
     def visible_doctypes(self) -> list[str]:
         """The indexed doctypes a user who isn't an agent may find."""
