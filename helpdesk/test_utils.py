@@ -1043,3 +1043,31 @@ def ticket_reader_role(role: str, users=(), rights=("read",), listed: bool = Tru
         else:
             frappe.db.delete("Custom DocPerm", {"name": row.name})
         frappe.clear_cache(doctype="HD Ticket")
+
+
+def add_received_message_as(user: str, ticket: str, content: str = "A reply"):
+    """Insert a received Communication on `ticket` as `user`, the way a mail
+    account or an integration adds a reply, skipping Communication's own
+    permission check. Returns its name and restores the previous user."""
+    previous = frappe.session.user
+    frappe.set_user(user)
+    try:
+        return (
+            frappe.get_doc(
+                {
+                    "doctype": "Communication",
+                    "communication_type": "Communication",
+                    "communication_medium": "Email",
+                    "sent_or_received": "Received",
+                    "sender": user,
+                    "subject": "Re: reply",
+                    "content": content,
+                    "reference_doctype": "HD Ticket",
+                    "reference_name": ticket,
+                }
+            )
+            .insert(ignore_permissions=True)
+            .name
+        )
+    finally:
+        frappe.set_user(previous)

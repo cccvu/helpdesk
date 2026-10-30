@@ -1251,8 +1251,11 @@ class HDTicket(Document):
         # Fetch description from communication if not set already. This might not be needed
         # anymore as a communication is created when a ticket is created.
         self.description = self.description or c.content
-        # Save the ticket, allowing for hooks to run.
-        self.save()
+        # Save the ticket, allowing for hooks to run. Whoever may add the
+        # communication may update its ticket this way: only these fields
+        # change, and a mail account or integration that adds replies needs no
+        # write permission on tickets.
+        self.save(ignore_permissions=True)
 
     def attach_file_with_doc(self, doctype, docname, file_url):
         if frappe.db.exists(

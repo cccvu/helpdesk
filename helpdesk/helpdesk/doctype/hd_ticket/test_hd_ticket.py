@@ -41,6 +41,7 @@ from helpdesk.test_utils import (
     add_contact_in_customer,
     add_holiday,
     add_message,
+    add_received_message_as,
     create_contact,
     create_customer,
     create_user,
@@ -943,6 +944,36 @@ class TestHDTicket(FrappeTestCase):
         )
         ticket_a.reload()
         self.assertIsNotNone(ticket_a.last_customer_response)
+
+    def test_a_reply_updates_its_ticket_without_write_permission(self):
+        """Whoever may add a communication, such as an integration's user,
+        updates its ticket, though it may not write tickets."""
+        ticket = make_ticket(raised_by="reply_requester@example.com")
+        integration = create_user("reply_integration@example.com").name
+        self.assertFalse(
+            frappe.has_permission(
+                "HD Ticket", "write", doc=ticket.name, user=integration
+            )
+        )
+
+        add_received_message_as(integration, ticket.name)
+
+        ticket.reload()
+        self.assertIsNotNone(ticket.last_customer_response)
+
+    def test_a_reply_to_a_merged_ticket_updates_the_target_without_write(self):
+        source = make_ticket(raised_by="reply_requester@example.com")
+        target = make_ticket(raised_by="reply_requester@example.com")
+        merge_ticket(source=source.name, target=target.name)
+        integration = create_user("reply_integration@example.com").name
+
+        reply = add_received_message_as(integration, source.name)
+
+        self.assertEqual(
+            frappe.db.get_value("Communication", reply, "reference_name"), target.name
+        )
+        target.reload()
+        self.assertIsNotNone(target.last_customer_response)
 
     def test_ticket_split(self):
         ticket1 = make_ticket(description="Test Desc for split")
