@@ -115,6 +115,11 @@ doc_events = {
     "User Invitation": {
         "validate": "helpdesk.extends.user_invitation.keep_redirect_on_site",
     },
+    "Workspace": {
+        "before_validate": "helpdesk.extends.workspace.check_workspace_write",
+        "before_rename": "helpdesk.extends.workspace.check_workspace_change",
+        "on_trash": "helpdesk.extends.workspace.check_workspace_change",
+    },
 }
 
 # For List View
