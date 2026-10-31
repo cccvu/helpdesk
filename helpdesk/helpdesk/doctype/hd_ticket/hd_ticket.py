@@ -476,6 +476,10 @@ class HDTicket(Document):
         old_doc = self.get_doc_before_save()
         if not old_doc or is_agent() or not self.via_customer_portal:
             return
+        # Server code saving without permission checks, such as a reply's update
+        # of its ticket (on_communication_update), isn't the portal user's edit.
+        if self.flags.ignore_permissions:
+            return
         is_closed = old_doc.status == "Closed"
         is_rated = bool(old_doc.feedback)
         if is_closed or is_rated:

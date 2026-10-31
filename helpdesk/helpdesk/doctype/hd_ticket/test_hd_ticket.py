@@ -962,6 +962,36 @@ class TestHDTicket(FrappeTestCase):
         ticket.reload()
         self.assertIsNotNone(ticket.last_customer_response)
 
+    def test_a_reply_reopens_a_closed_portal_ticket_without_write_permission(self):
+        """A non-agent may not edit a closed portal ticket, but a reply it may add
+        still reopens it, as a reply by email does."""
+        ticket = make_ticket(
+            raised_by="reply_requester@example.com", via_customer_portal=1
+        )
+        ticket.reload()
+        ticket.status = "Closed"
+        ticket.save()
+        integration = create_user("reply_integration@example.com").name
+
+        add_received_message_as(integration, ticket.name)
+
+        ticket.reload()
+        self.assertNotEqual(ticket.status, "Closed")
+        self.assertIsNotNone(ticket.last_customer_response)
+
+        # The portal user's own edit of a closed ticket is still refused.
+        ticket.status = "Closed"
+        ticket.save()
+        frappe.set_user(integration)
+        try:
+            ticket.load_doc_before_save()
+            ticket.flags.ignore_permissions = False  # make_ticket inserts with it on
+            self.assertRaises(frappe.PermissionError, ticket.check_update_perms)
+            ticket.flags.ignore_permissions = True
+            ticket.check_update_perms()
+        finally:
+            frappe.set_user("Administrator")
+
     def test_a_reply_to_a_merged_ticket_updates_the_target_without_write(self):
         source = make_ticket(raised_by="reply_requester@example.com")
         target = make_ticket(raised_by="reply_requester@example.com")
