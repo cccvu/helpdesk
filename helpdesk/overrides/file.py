@@ -21,7 +21,21 @@ class HelpdeskFile(File):
     Frappe version Helpdesk runs on.
     """
 
+    def is_downloadable(self):
+        """Also apply the ticket reader rule (hd_ticket's ticket_reader_file_permission,
+        a File has_permission hook) when a private file is served: Frappe v15's
+        is_downloadable checks only File's own rule, never an app's hooks.
+        Redundant once is_downloadable consults the has_permission hooks."""
+        from helpdesk.helpdesk.doctype.hd_ticket.hd_ticket import (
+            ticket_reader_file_permission,
+        )
+
+        if ticket_reader_file_permission(self, "read") is False:
+            return False
+        return super().is_downloadable()
+
     def before_insert(self):
+        self.refuse_ticket_readers()
         self.validate_canonical_file_url()
         self.validate_has_source()
         super().before_insert()
@@ -35,6 +49,15 @@ class HelpdeskFile(File):
             self.validate_unshared_privacy_change()
             self.validate_privacy_change_keeps_url_unique()
         super().validate()
+
+    def refuse_ticket_readers(self):
+        """A ticket reader adds no File: a new File naming an existing file's URL
+        would be the reader's own, and so readable whatever the file it copies
+        (Frappe v15's validate_private_file_access checks only File's own rule).
+        Redundant once that check consults the has_permission hooks."""
+        from helpdesk.helpdesk.doctype.hd_ticket.hd_ticket import refuse_ticket_readers
+
+        refuse_ticket_readers()
 
     def validate_canonical_file_url(self):
         """Refuse a local file_url that isn't in canonical form.
@@ -231,3 +254,20 @@ class HelpdeskFile(File):
         stored.check_permission("write")
         File.optimize_file(stored)
         self.reload()
+
+
+@frappe.whitelist()
+def zip_files(files: str):
+    """frappe.core.api.file.zip_files, leaving out each file is_downloadable
+    refuses: Frappe v15's File.zip_files checks only File's own rule, so the
+    ticket reader rule (HelpdeskFile.is_downloadable) would not apply. Drop
+    with its override_whitelisted_methods entry once it does."""
+    from frappe.core.api.file import zip_files as frappe_zip_files
+
+    allowed = []
+    for name in frappe.parse_json(files) or []:
+        if not isinstance(name, str) or not frappe.db.exists("File", name):
+            continue
+        if frappe.get_doc("File", name).is_downloadable():
+            allowed.append(name)
+    return frappe_zip_files(frappe.as_json(allowed))

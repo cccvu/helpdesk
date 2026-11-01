@@ -4,6 +4,8 @@
 import frappe
 from frappe.search.sqlite_search import SQLiteSearch, SQLiteSearchIndexMissingError
 
+from helpdesk.utils import is_agent
+
 
 class HelpdeskSearchIndexMissingError(SQLiteSearchIndexMissingError):
     pass
@@ -13,6 +15,10 @@ class HelpdeskSearchIndexMissingError(SQLiteSearchIndexMissingError):
 # skipped and results are permission-checked after the search instead, since an
 # unbounded IN list hits SQLite's bound-variable ceiling.
 PREFILTER_LIMIT = 500
+
+# Indexed doctypes only agents may find: notes are internal, even on tickets
+# others can read.
+AGENT_ONLY_DOCTYPES = ("HD Ticket Comment",)
 
 
 class HelpdeskSearch(SQLiteSearch):
@@ -74,19 +80,43 @@ class HelpdeskSearch(SQLiteSearch):
     }
 
     def search(self, query, title_only: bool = False, filters: dict | None = None):
+        # The core search puts each filter's key into its query as a column
+        # name, so only the index's own filter columns are kept.
+        filters = {
+            field: value
+            for field, value in (filters or {}).items()
+            if field in self.filter_fields()
+        }
         result = super().search(query, title_only=title_only, filters=filters)
+        if not is_agent():
+            result["results"] = [
+                r
+                for r in result["results"]
+                if r.get("doctype") in self.visible_doctypes()
+            ]
+            result["summary"]["filtered_matches"] = len(result["results"])
         if self.is_post_filter_required:
             result["results"] = self._drop_unpermitted(result["results"])
             result["summary"]["filtered_matches"] = len(result["results"])
         return result
 
     def get_search_filters(self) -> dict:
-        """Return permission filters based on accessible tickets."""
+        """Return permission filters based on accessible tickets, and for
+        anyone but agents, the doctypes they may find."""
+        doctypes = {} if is_agent() else {"doctype": self.visible_doctypes()}
         accessible_tickets = self.get_accessible_tickets()
         self.is_post_filter_required = accessible_tickets is None
         if self.is_post_filter_required:
-            return {}
-        return {"reference_ticket": accessible_tickets}
+            return doctypes
+        return {"reference_ticket": accessible_tickets, **doctypes}
+
+    def filter_fields(self) -> set[str]:
+        """The columns a search may filter on: the doctype and the metadata fields."""
+        return {"doctype", *self.INDEX_SCHEMA["metadata_fields"]}
+
+    def visible_doctypes(self) -> list[str]:
+        """The indexed doctypes a user who isn't an agent may find."""
+        return [d for d in self.INDEXABLE_DOCTYPES if d not in AGENT_ONLY_DOCTYPES]
 
     def get_accessible_tickets(self) -> list[str] | None:
         """Accessible tickets when few enough to prefilter, else None."""
@@ -193,11 +223,13 @@ class HelpdeskSearch(SQLiteSearch):
 			WHERE (name IN (SELECT value FROM json_each(?))
 				OR reference_name IN (SELECT value FROM json_each(?))
 				OR reference_ticket IN (SELECT value FROM json_each(?)))
+				AND doctype NOT IN (SELECT value FROM json_each(?))
 			GROUP BY agent_group, status, priority, customer, doctype
 		"""
 
         tickets_json = frappe.as_json(accessible_tickets)
-        results = self.sql(sql, [tickets_json] * 3, read_only=True)
+        hidden_json = frappe.as_json([] if is_agent() else AGENT_ONLY_DOCTYPES)
+        results = self.sql(sql, [tickets_json] * 3 + [hidden_json], read_only=True)
 
         # Aggregate the results
         teams = {}

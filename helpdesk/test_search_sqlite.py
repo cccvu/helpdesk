@@ -3,8 +3,15 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from helpdesk.api.search import get_filter_options, search
 from helpdesk.search_sqlite import HelpdeskSearch
-from helpdesk.test_utils import create_user, make_ticket
+from helpdesk.test_utils import (
+    add_comment,
+    add_message,
+    create_user,
+    make_agent,
+    make_ticket,
+)
 
 RESTRICTED_USER = "helpdesk-search-user@example.com"
 
@@ -67,3 +74,97 @@ class TestSearchPermissionFilter(FrappeTestCase):
         self.assertEqual(
             set(options), {"teams", "statuses", "priorities", "customers", "doctypes"}
         )
+
+
+NOTE_WORD = "zebracornnote"
+NOTE_INDEX = "test_note_search.db"
+NOTE_AGENT = "helpdesk-search-agent@example.com"
+
+
+class TestSearchHidesNotesFromNonAgents(FrappeTestCase):
+    """Notes (HD Ticket Comment) are internal: search never finds them for
+    anyone but agents, even on tickets they can read. Runs against a
+    throwaway index so the site's own one is never touched."""
+
+    def setUp(self):
+        create_user(RESTRICTED_USER).add_roles("HD Customer")
+        make_agent(NOTE_AGENT)
+        self.index = HelpdeskSearch(db_name=NOTE_INDEX)
+        self.index.drop_index()
+        self.index._ensure_fts_table()
+        self.addCleanup(self.index.drop_index)
+
+        ticket = make_ticket(
+            subject="Search note test",
+            description=f"Ticket {NOTE_WORD}",
+            raised_by=RESTRICTED_USER,
+        )
+        note = add_comment(ticket.name, f"Internal {NOTE_WORD}")
+        add_message(ticket.name, "Sent", NOTE_AGENT, subject=f"Mail {NOTE_WORD}")
+        mail = frappe.db.get_value(
+            "Communication",
+            {"reference_name": ticket.name, "subject": f"Mail {NOTE_WORD}"},
+            "name",
+        )
+        for doctype, name in (
+            ("HD Ticket", ticket.name),
+            ("HD Ticket Comment", note.name),
+            ("Communication", mail),
+        ):
+            self.index.index_doc(doctype, name)
+
+        searches = patch(
+            "helpdesk.search_sqlite.HelpdeskSearch",
+            lambda: HelpdeskSearch(db_name=NOTE_INDEX),
+        )
+        searches.start()
+        self.addCleanup(searches.stop)
+
+    def tearDown(self):
+        frappe.set_user("Administrator")
+
+    def found_as(self, user: str, filters: str | None = None) -> tuple[list, dict]:
+        frappe.set_user(user)
+        result = search(NOTE_WORD, filters=filters)
+        return [r["doctype"] for r in result["results"]], result["summary"]
+
+    def test_agents_find_notes(self):
+        doctypes, _ = self.found_as(NOTE_AGENT)
+        self.assertIn("HD Ticket Comment", doctypes)
+        self.assertIn("HD Ticket", doctypes)
+
+    def test_others_find_their_tickets_but_no_notes(self):
+        doctypes, summary = self.found_as(RESTRICTED_USER)
+        self.assertIn("HD Ticket", doctypes)
+        self.assertNotIn("HD Ticket Comment", doctypes)
+        self.assertEqual(
+            summary["total_matches"], len(doctypes), "no count of hidden notes"
+        )
+
+    def test_others_find_no_notes_when_results_are_filtered_after_search(self):
+        with patch("helpdesk.search_sqlite.PREFILTER_LIMIT", 0):
+            doctypes, summary = self.found_as(RESTRICTED_USER)
+        self.assertNotIn("HD Ticket Comment", doctypes)
+        self.assertEqual(summary["filtered_matches"], len(doctypes))
+
+    def test_others_cannot_ask_for_notes(self):
+        doctypes, _ = self.found_as(
+            RESTRICTED_USER, filters='{"doctype": "HD Ticket Comment"}'
+        )
+        self.assertNotIn("HD Ticket Comment", doctypes)
+
+    def test_only_index_columns_filter(self):
+        expected, _ = self.found_as(RESTRICTED_USER)
+        for filters in ('{"not a column": "x"}', '{"subject": "x", "status": []}'):
+            with self.subTest(filters=filters):
+                doctypes, summary = self.found_as(RESTRICTED_USER, filters=filters)
+                expected_here = [] if "status" in filters else expected
+                self.assertEqual(sorted(doctypes), sorted(expected_here))
+                self.assertNotIn("not a column", summary["applied_filters"])
+                self.assertNotIn("subject", summary["applied_filters"])
+
+    def test_filter_options_count_no_notes_for_others(self):
+        frappe.set_user(RESTRICTED_USER)
+        self.assertNotIn("HD Ticket Comment", get_filter_options()["doctypes"])
+        frappe.set_user(NOTE_AGENT)
+        self.assertIn("HD Ticket Comment", get_filter_options()["doctypes"])
