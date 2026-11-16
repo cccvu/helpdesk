@@ -35,6 +35,14 @@
  *   Unescaped upstream.
  * - avatar_group (frappe): the "+N" title listing extra users' full names.
  *   Unescaped upstream.
+ * - get_attachment_row (CommunicationComposer.prototype): the email
+ *   composer's attachment list (file name in title and text, URL in href).
+ *   Unescaped upstream.
+ * - render_grid_view and get_left_html (FileView.prototype): the File
+ *   manager's grid (file URL in src, file name in alt) and list (a folder's
+ *   name in the checkbox's data-name). Unescaped upstream.
+ * - item_html (ImageView.prototype): the image view's alt text and record
+ *   name in data-name. Unescaped upstream.
  * - render_template (frappe), for three templates only:
  *   - list_sidebar_stat (tag label): escaped on develop by
  *     frappe/frappe#46726; v15 backport frappe/frappe#47326 is open.
@@ -105,6 +113,10 @@
       "get_column_html",
       "get_dropdown_html",
       "avatar_group",
+      "get_attachment_row",
+      "render_grid_view",
+      "get_left_html",
+      "item_html",
       "render_template",
     ].forEach(report_missing);
     return;
@@ -472,6 +484,191 @@
       return escape_keys(data, ["title", "image_url"]);
     },
   };
+
+  // Frappe v15.121.2, public/js/frappe/views/communication.js,
+  // get_attachment_row. A wrapper: the row gets a shallow copy of the
+  // attachment with its name, file_name and file_url escaped, which the
+  // original writes into data-file-name, title, the text and href. The
+  // composer reads them back with .attr(), which decodes.
+  install(
+    "get_attachment_row",
+    () => frappe.views.CommunicationComposer.prototype,
+    "get_attachment_row",
+    (original) =>
+      function (attachment) {
+        const args = Array.prototype.slice.call(arguments);
+        if (attachment && typeof attachment === "object") {
+          args[0] = escape_keys(attachment, ["name", "file_name", "file_url"]);
+        }
+        return original.apply(this, args);
+      }
+  );
+
+  // Frappe v15.121.2, public/js/frappe/views/file/file_view.js,
+  // render_grid_view. Change: the image's file_url and file_name are escaped
+  // in src and alt (d._title is already escaped by prepare_datum, d.name
+  // by escape()).
+  install(
+    "render_grid_view",
+    () => frappe.views.FileView.prototype,
+    "render_grid_view",
+    () =>
+      function () {
+        let html = this.data
+          .map((d) => {
+            const icon_class = d.icon_class + "-large";
+            let file_body_html =
+              d._type == "image"
+                ? `<div class="file-image"><img src="${frappe.utils.escape_html(
+                    d.file_url
+                  )}" alt="${frappe.utils.escape_html(d.file_name)}"></div>`
+                : frappe.utils.icon(icon_class, {
+                    width: "40px",
+                    height: "45px",
+                  });
+            const name = escape(d.name);
+            const draggable = d.type == "Folder" ? false : true;
+            return `
+				<a href="${this.get_route_url(d)}"
+					draggable="${draggable}" class="file-wrapper ellipsis" data-name="${name}">
+					<div class="file-header">
+						<input class="level-item list-row-checkbox hidden-xs" type="checkbox" data-name="${name}">
+					</div>
+					<div class="file-body">
+						${file_body_html}
+					</div>
+					<div class="file-footer">
+						<div class="file-title ellipsis">${d._title}</div>
+						<div class="file-creation">${this.get_creation_date(d)}</div>
+					</div>
+				</a>
+			`;
+          })
+          .join("");
+
+        this.$result.addClass("file-grid-view");
+        this.$result.empty().html(
+          `<div class="file-grid">
+				${html}
+			</div>`
+        );
+      }
+  );
+
+  // Frappe v15.121.2, public/js/frappe/views/file/file_view.js,
+  // get_left_html. Change: the file's name (a folder's is its path, which
+  // holds the folder name as typed) is escaped in the checkbox's data-name.
+  install(
+    "get_left_html",
+    () => frappe.views.FileView.prototype,
+    "get_left_html",
+    () =>
+      function (file) {
+        file = this.prepare_datum(file);
+        const file_size = file.file_size
+          ? frappe.form.formatters.FileSize(file.file_size)
+          : "";
+        const route_url = this.get_route_url(file);
+
+        return `
+			<div class="list-row-col ellipsis list-subject level">
+				<span class="level-item file-select">
+					<input class="list-row-checkbox"
+						type="checkbox" data-name="${frappe.utils.escape_html(file.name)}">
+				</span>
+				<span class="level-item  ellipsis" title="${frappe.utils.escape_html(
+          file.file_name
+        )}">
+					<a class="ellipsis" href="${route_url}" title="${frappe.utils.escape_html(
+          file.file_name
+        )}">
+						${file.subject_html}
+					</a>
+				</span>
+			</div>
+			<div class="list-row-col ellipsis hidden-xs text-muted">
+				<span>${file_size}</span>
+			</div>
+			<div class="list-row-col ellipsis hidden-xs text-muted">
+				<span>${file.file_type || ""}</span>
+			</div>
+			<div class="list-row-col ellipsis hidden-xs text-muted">
+				<span>${this.get_creation_date(file)}</span>
+			</div>
+		`;
+      }
+  );
+
+  // Frappe v15.121.2, public/js/frappe/views/image/image_view.js, item_html.
+  // Change: the image's alt uses the escaped title, and the title link's
+  // data-name the escaped record name.
+  install(
+    "item_html",
+    () => frappe.views.ImageView.prototype,
+    "item_html",
+    () =>
+      function (item) {
+        item._name = encodeURI(item.name);
+        const encoded_name = item._name;
+        const title = strip_html(item[this.meta.title_field || "name"]);
+        const escaped_title = frappe.utils.escape_html(title);
+        const _class = !item._image_url ? "no-image" : "";
+        const _html = item._image_url
+          ? `<img data-name="${encoded_name}" src="${frappe.utils.escape_html(
+              item._image_url
+            )}" alt="${escaped_title}">`
+          : `<span class="placeholder-text">
+				${frappe.get_abbr(title)}
+			</span>`;
+
+        let details = this.item_details_html(item);
+
+        const expand_button_html = item._image_url
+          ? `<div class="zoom-view" data-name="${encoded_name}">
+				${frappe.utils.icon("expand", "xs")}
+			</div>`
+          : "";
+
+        return `
+			<div class="image-view-item ellipsis">
+				<div class="image-view-header">
+					<div>
+						<input class="level-item list-row-checkbox hidden-xs"
+							type="checkbox" data-name="${escape(item.name)}">
+						${this.get_like_html(item)}
+					</div>
+				</span>
+				</div>
+				<div class="image-view-body ${_class}">
+					<a data-name="${encoded_name}"
+						title="${encoded_name}"
+						href="${this.get_form_link(item)}"
+					>
+						<div class="image-field"
+							data-name="${encoded_name}"
+						>
+							${_html}
+						</div>
+					</a>
+					${expand_button_html}
+				</div>
+				<div class="image-view-footer">
+					<div class="image-title">
+						<span class="ellipsis" title="${escaped_title}">
+							<a class="ellipsis" href="${this.get_form_link(item)}"
+								title="${escaped_title}" data-doctype="${
+          this.doctype
+        }" data-name="${frappe.utils.escape_html(item.name)}">
+								${title}
+							</a>
+						</span>
+					</div>
+					${details}
+				</div>
+			</div>
+		`;
+      }
+  );
 
   install(
     "render_template",
