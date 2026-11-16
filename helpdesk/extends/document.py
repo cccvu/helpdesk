@@ -25,11 +25,20 @@ NON_HTML_FIELDTYPES = {"Attach", "Attach Image", "Barcode", "Code", "JSON"}
 DECODED_MARKUP = re.compile(r"[<>]")
 
 # Fields that hold JSON whose strings the desk can render as HTML: the workspace
-# editor puts its blocks' text into innerHTML, and the list view shows a saved
-# filter's field name in a message as HTML. A JSON escape ("\u003c") hides markup
-# from MARKUP, and sanitizing the JSON text as HTML mangles its quotes, so each
-# string in it is sanitized instead (sanitize_json_html).
-JSON_HTML_FIELDS = {("Workspace", "content"), ("List Filter", "filters")}
+# editor puts its blocks' text into innerHTML, the list view shows a saved
+# filter's field name in a message as HTML, and the Kanban view shows a board's
+# unknown card field (msgprint "Unknown Column: {0}") and filter field
+# ("Invalid filter: {0}") as HTML. A JSON escape ("\u003c") hides markup from
+# MARKUP, and sanitizing the JSON text as HTML mangles its quotes, so each
+# string in it is sanitized instead (sanitize_json_html). An entry here is
+# sanitized whatever its fieldtype: the Kanban Board's are Code fields, which
+# are otherwise never sanitized.
+JSON_HTML_FIELDS = {
+    ("Workspace", "content"),
+    ("List Filter", "filters"),
+    ("Kanban Board", "fields"),
+    ("Kanban Board", "filters"),
+}
 
 # Fields their controller sanitizes itself (ignore_xss_filter, so the hook
 # otherwise leaves them alone) but that the desk loads into a Text Editor: /app's
@@ -92,8 +101,9 @@ def sanitize_html_fields(doc, method=None):
     Upstream develop closes both v15 gaps (frappe/frappe#41626 and
     has_html_tags); drop this, and the Communication recipient guard beside it,
     once version-15 has them. drop_markup_data can go once Frappe's mention
-    blot writes its values as text, and JSON_HTML_FIELDS once the workspace
-    blocks and the list view's filter message escape what they render.
+    blot writes its values as text, and each JSON_HTML_FIELDS entry once the
+    desk escapes what it renders from that field (the workspace blocks, the
+    list view's filter message, the Kanban view's column and filter messages).
     """
     if frappe.flags.in_install:
         return
@@ -122,7 +132,7 @@ def _sanitize_doc(doc):
             continue
         if (
             df.get("ignore_xss_filter")
-            or fieldtype in NON_HTML_FIELDTYPES
+            or (fieldtype in NON_HTML_FIELDTYPES and not is_json_html)
             or (
                 fieldtype in ("Data", "Small Text", "Text")
                 and df.get("options") == "Email"

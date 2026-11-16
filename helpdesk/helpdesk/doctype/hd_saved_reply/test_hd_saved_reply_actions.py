@@ -278,6 +278,18 @@ class TestHDSavedReplyActions(FrappeTestCase):
                 "Comma Tag", [{"action_type": "Add Tag", "value": "a,b"}]
             )
 
+    def test_tag_that_breaks_out_of_an_attribute_rejected(self):
+        # /app writes tags into HTML attributes unescaped (issue 320)
+        for value in ('x"y', "&quot;x", "<b"):
+            with self.subTest(value=value), self.assertRaises(frappe.ValidationError):
+                make_saved_reply_with_actions(
+                    "Quote Tag", [{"action_type": "Add Tag", "value": value}]
+                )
+        reply = make_saved_reply_with_actions(
+            "Ampersand Tag", [{"action_type": "Add Tag", "value": "R&D"}]
+        )
+        self.assertEqual(json.loads(reply.actions)[0]["value"], "R&D")
+
     def test_apply_tag_actions(self):
         ticket = make_ticket(subject="Tag Apply Ticket")
         ticket.add_tag("stale-tag")

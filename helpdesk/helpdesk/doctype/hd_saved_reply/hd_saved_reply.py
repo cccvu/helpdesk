@@ -6,7 +6,9 @@ import json
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import escape_html
 
+from helpdesk.extends.labels import is_safe_label
 from helpdesk.utils import capture_event, get_agents_team
 
 # The single registry of action types, driving validation and apply.
@@ -149,8 +151,9 @@ def is_action_valid(action_type: str | None, value: str | None) -> bool:
     if spec["kind"] == "comment":
         return True
     if spec["kind"] == "tag":
-        # _user_tags is a comma-separated column, so a comma would split it
-        return "," not in value
+        # _user_tags is a comma-separated column, so a comma would split it;
+        # and /app writes tags into HTML attributes (helpdesk.extends.labels)
+        return is_safe_label(value, allow_comma=False)
     doctype, usable_filters = spec["target"]
     return bool(frappe.db.exists(doctype, {"name": value, **usable_filters}))
 
@@ -159,7 +162,7 @@ def validate_action(action_type: str, value: str) -> None:
     if not is_action_valid(action_type, value):
         frappe.throw(
             _("Invalid action {0}: {1} does not exist or is disabled").format(
-                _(action_type or ""), value
+                escape_html(_(action_type or "")), escape_html(value or "")
             )
         )
 
