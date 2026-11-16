@@ -19,6 +19,10 @@ add_to_apps_screen = [
     }
 ]
 
+# Escapes what Frappe v15's /app writes into HTML unescaped (tag, Kanban column
+# and record names, user names); each piece names when it can go.
+app_include_js = ["frappe_v15_escapes.bundle.js"]
+
 get_site_info = "helpdesk.activation.get_site_info"
 
 after_install = "helpdesk.setup.install.after_install"
