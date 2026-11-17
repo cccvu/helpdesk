@@ -19,6 +19,10 @@ add_to_apps_screen = [
     }
 ]
 
+# Escapes what Frappe v15's /app writes into HTML unescaped (tag, Kanban column
+# and record names, user names); each piece names when it can go.
+app_include_js = ["frappe_v15_escapes.bundle.js"]
+
 get_site_info = "helpdesk.activation.get_site_info"
 
 after_install = "helpdesk.setup.install.after_install"
@@ -76,7 +80,10 @@ user_invitation = {
 doc_events = {
     "*": {
         "validate": "helpdesk.extends.attach_field.validate_private_attachments",
-        "before_validate": "helpdesk.extends.document.sanitize_html_fields",
+        "before_validate": [
+            "helpdesk.extends.document.sanitize_html_fields",
+            "helpdesk.extends.labels.check_user_tags",
+        ],
         "before_save": "helpdesk.extends.document.sanitize_html_fields",
     },
     "Assignment Rule": {
@@ -122,6 +129,16 @@ doc_events = {
     },
     "User Invitation": {
         "validate": "helpdesk.extends.user_invitation.keep_redirect_on_site",
+    },
+    "Tag": {
+        "before_validate": "helpdesk.extends.labels.check_tag",
+        "before_rename": "helpdesk.extends.labels.check_tag_rename",
+    },
+    "Tag Link": {
+        "before_validate": "helpdesk.extends.labels.check_tag_link",
+    },
+    "Kanban Board": {
+        "before_validate": "helpdesk.extends.labels.check_kanban_columns",
     },
     "Workspace": {
         "before_validate": "helpdesk.extends.workspace.check_workspace_write",
